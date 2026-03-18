@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+*.tgz
+
+# Editor settings
+.idea/
+.vscode/
+
+# Local environment files
+.env
+.env.*
+
+# Local plugin state
+multi-copilot-auth.json
+multi-copilot-mapping.json
