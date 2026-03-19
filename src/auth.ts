@@ -3,7 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { AuthHook, AuthOuathResult, PluginInput } from "@opencode-ai/plugin";
 
 import { AliasSchema } from "./schemas.js";
-import { normaliseDomain } from "./provider.js";
+import { normaliseDomain, constructBaseURL } from "./provider.js";
 
 const OAUTH_POLLING_SAFETY_MARGIN_MS = 3000;
 const USER_AGENT = "opencode-multi-copilot";
@@ -26,14 +26,6 @@ type LedgerModule = {
     account: AccountRecord;
   }>;
 };
-
-function getCopilotBaseUrl(enterpriseUrl?: string): string {
-  if (!enterpriseUrl) {
-    return "https://api.github.com";
-  }
-
-  return `https://copilot-api.${normaliseDomain(enterpriseUrl)}`;
-}
 
 function getOauthUrls(inputs: Record<string, string>): {
   deviceCodeUrl: string;
@@ -102,13 +94,13 @@ function extractModelId(body: unknown): string | undefined {
 
 function rewriteRequestTarget(
   request: Request | URL | string,
-  enterpriseUrl: string | undefined
+  account: AccountRecord
 ): Request | URL | string {
-  if (!enterpriseUrl) {
+  if (!account.enterpriseUrl) {
     return request;
   }
 
-  const baseUrl = getCopilotBaseUrl(enterpriseUrl);
+  const baseUrl = constructBaseURL(account);
   const target = request instanceof URL ? request.href : request.toString();
 
   try {
@@ -154,7 +146,7 @@ export function createAuthHook(input: PluginInput): AuthHook {
       }
 
       return {
-        baseURL: getCopilotBaseUrl(info.enterpriseUrl),
+        baseURL: constructBaseURL({ enterpriseUrl: info.enterpriseUrl ?? "" }),
         apiKey: "copilot",
         async fetch(request: Request | URL | string, init?: RequestInit) {
           const modelId = extractModelId(init?.body);
@@ -180,7 +172,7 @@ export function createAuthHook(input: PluginInput): AuthHook {
           delete headers.authorization;
           delete headers["x-api-key"];
 
-          return fetch(rewriteRequestTarget(request, account.enterpriseUrl), {
+          return fetch(rewriteRequestTarget(request, account), {
             ...init,
             headers,
           });
