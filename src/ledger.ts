@@ -90,24 +90,9 @@ export async function getAccount(alias: string): Promise<AccountData | undefined
 }
 
 async function resolveAlias(modelId: string, aliases: string[]): Promise<string> {
-  if (resolveAliasForModel.length > 2) {
-    const { readMappingConfig } = await import("./config.js");
-    const mapping = await readMappingConfig();
-    const legacyResolveAliasForModel = resolveAliasForModel as unknown as (
-      requestedModelId: string,
-      authAliases: string[],
-      currentMapping: Awaited<ReturnType<typeof readMappingConfig>>
-    ) => string | undefined;
-
-    return legacyResolveAliasForModel(modelId, aliases, mapping) ?? aliases[0];
-  }
-
-  const currentResolveAliasForModel = resolveAliasForModel as unknown as (
-    requestedModelId: string,
-    authAliases: string[]
-  ) => Promise<string | undefined> | string | undefined;
-
-  return (await currentResolveAliasForModel(modelId, aliases)) ?? aliases[0];
+  const { readMappingConfig } = await import("./config.js");
+  const mapping = await readMappingConfig();
+  return resolveAliasForModel(modelId, aliases, mapping) ?? aliases[0];
 }
 
 export async function getTokenForAlias(alias: string): Promise<AccountData> {
@@ -168,4 +153,8 @@ export function sanitiseLedger(ledger: AuthLedger): Record<string, unknown> {
   }
 
   return sanitised;
+}
+
+export function toJSON(): Record<string, unknown> {
+  return sanitiseLedger(cachedLedger ?? {});
 }

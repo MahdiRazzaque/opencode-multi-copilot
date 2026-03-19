@@ -15,10 +15,12 @@ mock.module("node:fs/promises", () => ({
 }));
 
 const mockResolveAliasForModel = mock(async (_modelId: string, aliases: string[]) => aliases[0] ?? "work");
+const mockReadMappingConfig = mock(async () => ({ mappings: {}, default_account: "work" }));
 
 mock.module("./config.js", () => ({
   AUTH_PATH: "/mock/path/multi-copilot-auth.json",
   resolveAliasForModel: mockResolveAliasForModel,
+  readMappingConfig: mockReadMappingConfig,
 }));
 
 const {
@@ -31,6 +33,7 @@ const {
   sanitiseLedger,
   saveLedger,
   setAccount,
+  toJSON,
 } = await import("./ledger.js");
 
 const workAccount: AccountData = {
@@ -261,7 +264,10 @@ describe("ledger state manager", () => {
         alias: "work",
         account: workAccount,
       });
-      expect(mockResolveAliasForModel).toHaveBeenCalledWith("claude-opus-4.6", ["work", "personal"]);
+      expect(mockResolveAliasForModel).toHaveBeenCalledWith("claude-opus-4.6", ["work", "personal"], {
+        mappings: {},
+        default_account: "work",
+      });
     });
 
     test("resolveAccountForModel throws when no accounts are authenticated", async () => {
@@ -278,7 +284,10 @@ describe("ledger state manager", () => {
         alias: "personal",
         account: personalAccount,
       });
-      expect(mockResolveAliasForModel).toHaveBeenCalledWith("gpt-4.1", ["personal"]);
+      expect(mockResolveAliasForModel).toHaveBeenCalledWith("gpt-4.1", ["personal"], {
+        mappings: {},
+        default_account: "work",
+      });
     });
 
     test("error messages stay in British English", async () => {
@@ -295,6 +304,36 @@ describe("ledger state manager", () => {
       expect(noAccountsMessage).not.toContain("authorize");
       expect(missingAliasMessage).not.toContain("initialize");
       expect(noAccountsMessage).not.toContain("initialize");
+    });
+  });
+
+  describe("toJSON", () => {
+    test("returns empty object when cache is empty", () => {
+      clearLedgerCache();
+      expect(toJSON()).toEqual({});
+    });
+
+    test("returns sanitised data after an account is set", async () => {
+      await setAccount("work", workAccount);
+      const result = toJSON();
+
+      expect(result).toEqual({
+        work: {
+          ...workAccount,
+          access_token: "[REDACTED]",
+          refresh_token: "[REDACTED]",
+        },
+      });
+    });
+
+    test("does not expose raw tokens", async () => {
+      await setAccount("personal", personalAccount);
+      const result = toJSON();
+      const serialised = JSON.stringify(result);
+
+      expect(serialised).toContain("[REDACTED]");
+      expect(serialised).not.toContain(personalAccount.access_token);
+      expect(serialised).not.toContain(personalAccount.refresh_token);
     });
   });
 });
