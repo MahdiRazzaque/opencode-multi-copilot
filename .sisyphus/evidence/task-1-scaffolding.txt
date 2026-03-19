@@ -1,0 +1,19 @@
+BUN INSTALL OUTPUT:
+bun install v1.3.11 (af24e281)
+
+Checked 16 installs across 17 packages (no changes) [2.00ms]
+\nBUN TEST OUTPUT:
+bun test v1.3.11 (af24e281)
+
+ 0 pass
+ 0 fail
+Ran 0 tests across 1 file. [11.00ms]
+\nBUN TYPECHECK OUTPUT:
+$ tsc --noEmit
+\nDEPENDENCIES CHECK:
+    "@opencode-ai/plugin": "latest",
+    "@opencode-ai/sdk": "latest",
+    "zod": "latest",
+    "@ai-sdk/openai-compatible": "latest"
+\nTSCONFIG CHECK:
+    "strict": true,
