@@ -76,7 +76,7 @@ function validateEnterpriseUrl(value: string): string | undefined {
       return "Please enter a valid URL or domain";
     }
     return undefined;
-  } catch {
+  } catch (_e) {
     return "Please enter a valid URL (e.g. company.ghe.com or https://company.ghe.com)";
   }
 }
@@ -95,7 +95,7 @@ function extractModelId(body: unknown): string | undefined {
     }
 
     return model.replace(/^multi-copilot\//, "").replace(/^github-copilot\//, "");
-  } catch {
+  } catch (_e) {
     return undefined;
   }
 }
@@ -114,7 +114,7 @@ function rewriteRequestTarget(
   try {
     const url = new URL(target);
     return new URL(`${baseUrl}${url.pathname}${url.search}`);
-  } catch {
+  } catch (_e) {
     return request;
   }
 }
