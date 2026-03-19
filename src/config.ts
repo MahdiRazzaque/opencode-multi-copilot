@@ -1,118 +1,44 @@
 import * as fs from "node:fs/promises";
-import { homedir } from "node:os";
+import * as os from "node:os";
 import * as path from "node:path";
+import { EMPTY_MAPPING_CONFIG } from "./schemas.js";
 
-import { EMPTY_MAPPING_CONFIG, MappingConfigSchema } from "./schemas.js";
-import type { MappingConfig } from "./schemas.js";
-
-export const CONFIG_DIR = path.join(homedir(), ".config", "opencode");
-export const MAPPING_PATH = path.join(CONFIG_DIR, "multi-copilot-mapping.json");
+export const CONFIG_DIR = path.join(os.homedir(), ".config", "opencode");
+export const MAPPING_PATH = path.join(
+  CONFIG_DIR,
+  "multi-copilot-mapping.json"
+);
 export const AUTH_PATH = path.join(CONFIG_DIR, "multi-copilot-auth.json");
-
-let cachedMapping: MappingConfig | null = null;
-let cachedMtime: number | null = null;
-
-function isMissingFileError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  const errorWithCode = error as Error & { code?: string };
-  return errorWithCode.code === "ENOENT" || error.message.includes("ENOENT");
-}
-
-async function writeFileAtomically(filePath: string, content: string): Promise<void> {
-  const tempPath = `${filePath}.tmp`;
-  await fs.writeFile(tempPath, content, "utf-8");
-  await fs.rename(tempPath, filePath);
-}
 
 export async function ensureConfigDir(): Promise<void> {
   await fs.mkdir(CONFIG_DIR, { recursive: true });
 }
 
 export async function ensureMappingConfig(): Promise<void> {
+  await ensureConfigDir();
+
   try {
     await fs.access(MAPPING_PATH);
-    return;
-  } catch (error) {
-    if (!isMissingFileError(error)) {
-      throw error;
-    }
+  } catch {
+    const tmpPath = `${MAPPING_PATH}.tmp`;
+    await fs.writeFile(
+      tmpPath,
+      JSON.stringify(EMPTY_MAPPING_CONFIG, null, 2),
+      "utf-8"
+    );
+    await fs.rename(tmpPath, MAPPING_PATH);
   }
-
-  await ensureConfigDir();
-  await writeFileAtomically(MAPPING_PATH, `${JSON.stringify(EMPTY_MAPPING_CONFIG, null, 2)}\n`);
 }
 
 export async function ensureAuthLedger(): Promise<void> {
+  await ensureConfigDir();
+
   try {
     await fs.access(AUTH_PATH);
-    return;
-  } catch (error) {
-    if (!isMissingFileError(error)) {
-      throw error;
-    }
+  } catch {
+    const tmpPath = `${AUTH_PATH}.tmp`;
+    await fs.writeFile(tmpPath, JSON.stringify({}, null, 2), "utf-8");
+    await fs.rename(tmpPath, AUTH_PATH);
+    await fs.chmod(AUTH_PATH, 0o600);
   }
-
-  await ensureConfigDir();
-  await writeFileAtomically(AUTH_PATH, `${JSON.stringify({}, null, 2)}\n`);
-  await fs.chmod(AUTH_PATH, 0o600);
-}
-
-export function clearMappingCache(): void {
-  cachedMapping = null;
-  cachedMtime = null;
-}
-
-export async function readMappingConfig(): Promise<MappingConfig> {
-  const statResult = await fs.stat(MAPPING_PATH);
-  const currentMtime = statResult.mtimeMs;
-
-  if (cachedMapping !== null && cachedMtime === currentMtime) {
-    return cachedMapping;
-  }
-
-  const content = await fs.readFile(MAPPING_PATH, "utf-8");
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content) as unknown;
-  } catch (error) {
-    throw new Error(`Failed to parse mapping config at ${MAPPING_PATH}: invalid JSON`, {
-      cause: error,
-    });
-  }
-
-  try {
-    const validated = MappingConfigSchema.parse(parsed);
-    cachedMapping = validated;
-    cachedMtime = currentMtime;
-    return validated;
-  } catch (error) {
-    throw new Error(`Failed to validate mapping config at ${MAPPING_PATH}`, {
-      cause: error,
-    });
-  }
-}
-
-export function resolveAliasForModel(
-  modelId: string,
-  authAliases: string[],
-  mapping: MappingConfig
-): string | undefined {
-  const explicitAlias = mapping.mappings[`github-copilot/${modelId}`];
-  if (explicitAlias) {
-    return explicitAlias;
-  }
-
-  if (mapping.default_account) {
-    return mapping.default_account;
-  }
-
-  if (authAliases.length > 0) {
-    return authAliases[0];
-  }
-
-  return undefined;
 }
