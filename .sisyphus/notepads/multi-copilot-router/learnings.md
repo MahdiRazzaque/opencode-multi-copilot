@@ -54,3 +54,8 @@
 - Per-alias serialisation works cleanly with `Map<string, Promise<void>>`; same-alias writes queue, while different aliases can both reach `writeFile` before either resolves
 - `sanitiseLedger()` should return a deep copied record shape with every `access_token` and `refresh_token` replaced by `"[REDACTED]"`; the original ledger object remains unchanged
 - Atomic persistence for the auth ledger follows the repo convention: write `${AUTH_PATH}.tmp`, rename to `AUTH_PATH`, then chmod `0o600`
+
+## Task 9 Learnings
+
+- `src/provider.ts` already matched the T8 enterprise URL contract, so Task 9 only needed tests for protocol-only normalisation, path preservation, and explicit personal-versus-enterprise base URL routing
+- Enterprise URL normalisation must stay identical to the upstream copilot helper logic: strip only the protocol and a single trailing slash, while preserving any path suffixes

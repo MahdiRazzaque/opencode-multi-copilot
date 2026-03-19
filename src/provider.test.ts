@@ -317,4 +317,30 @@ describe("provider helpers", () => {
   test("normaliseDomain strips protocol and trailing slash", () => {
     expect(normaliseDomain("https://github.example.com/")).toBe("github.example.com");
   });
+
+  test("normaliseDomain strips protocol without requiring a trailing slash", () => {
+    expect(normaliseDomain("https://github.example.com")).toBe("github.example.com");
+  });
+
+  test("normaliseDomain preserves path segments after stripping protocol", () => {
+    expect(normaliseDomain("https://github.example.com/api/v3")).toBe("github.example.com/api/v3");
+  });
+
+  test("constructBaseURL uses enterprise routing only for enterprise accounts", () => {
+    const enterpriseAccount = {
+      access_token: "ent-token",
+      refresh_token: "ent-token",
+      expires: 0,
+      enterpriseUrl: "https://github.mycompany.com",
+    };
+    const personalAccount = {
+      access_token: "per-token",
+      refresh_token: "per-token",
+      expires: 0,
+      enterpriseUrl: "",
+    };
+
+    expect(constructBaseURL(personalAccount)).toBe("https://api.github.com");
+    expect(constructBaseURL(enterpriseAccount)).toBe("https://copilot-api.github.mycompany.com");
+  });
 });
