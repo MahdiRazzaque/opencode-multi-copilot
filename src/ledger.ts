@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 
-import { AUTH_PATH } from "./config.js";
+import { AUTH_PATH, resolveAliasForModel } from "./config.js";
 import { AuthLedgerSchema } from "./schemas.js";
 import type { AccountData, AuthLedger } from "./schemas.js";
 
@@ -87,6 +87,57 @@ export async function saveLedger(data: AuthLedger): Promise<void> {
 export async function getAccount(alias: string): Promise<AccountData | undefined> {
   const ledger = await loadLedger();
   return ledger[alias];
+}
+
+async function resolveAlias(modelId: string, aliases: string[]): Promise<string> {
+  if (resolveAliasForModel.length > 2) {
+    const { readMappingConfig } = await import("./config.js");
+    const mapping = await readMappingConfig();
+    const legacyResolveAliasForModel = resolveAliasForModel as unknown as (
+      requestedModelId: string,
+      authAliases: string[],
+      currentMapping: Awaited<ReturnType<typeof readMappingConfig>>
+    ) => string | undefined;
+
+    return legacyResolveAliasForModel(modelId, aliases, mapping) ?? aliases[0];
+  }
+
+  const currentResolveAliasForModel = resolveAliasForModel as unknown as (
+    requestedModelId: string,
+    authAliases: string[]
+  ) => Promise<string | undefined> | string | undefined;
+
+  return (await currentResolveAliasForModel(modelId, aliases)) ?? aliases[0];
+}
+
+export async function getTokenForAlias(alias: string): Promise<AccountData> {
+  const ledger = await loadLedger();
+  const account = ledger[alias];
+
+  if (!account) {
+    throw new Error(
+      `No authentication found for alias '${alias}'. Run 'opencode auth multi-copilot' to authenticate this account.`
+    );
+  }
+
+  return account;
+}
+
+export async function resolveAccountForModel(
+  modelId: string
+): Promise<{ alias: string; account: AccountData }> {
+  const ledger = await loadLedger();
+  const aliases = Object.keys(ledger);
+
+  if (aliases.length === 0) {
+    throw new Error(
+      "No accounts authenticated. Run 'opencode auth multi-copilot' to set up your first account."
+    );
+  }
+
+  const alias = await resolveAlias(modelId, aliases);
+  const account = await getTokenForAlias(alias);
+  return { alias, account };
 }
 
 export async function setAccount(alias: string, account: AccountData): Promise<void> {

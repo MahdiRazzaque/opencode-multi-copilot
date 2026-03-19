@@ -14,11 +14,20 @@ mock.module("node:fs/promises", () => ({
   chmod: mockChmod,
 }));
 
+const mockResolveAliasForModel = mock(async (_modelId: string, aliases: string[]) => aliases[0] ?? "work");
+
+mock.module("./config.js", () => ({
+  AUTH_PATH: "/mock/path/multi-copilot-auth.json",
+  resolveAliasForModel: mockResolveAliasForModel,
+}));
+
 const {
   clearLedgerCache,
   getAccount,
+  getTokenForAlias,
   loadLedger,
   removeAccount,
+  resolveAccountForModel,
   sanitiseLedger,
   saveLedger,
   setAccount,
@@ -62,6 +71,20 @@ async function waitForCallCount(fn: { mock: { calls: unknown[][] } }, expectedCo
   throw new Error(`Timed out waiting for ${expectedCount} calls`);
 }
 
+async function getErrorMessage(action: () => Promise<unknown>): Promise<string> {
+  try {
+    await action();
+  } catch (error) {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    throw error;
+  }
+
+  throw new Error("Expected action to throw");
+}
+
 describe("ledger state manager", () => {
   beforeEach(() => {
     clearLedgerCache();
@@ -69,11 +92,13 @@ describe("ledger state manager", () => {
     mockWriteFile.mockReset();
     mockRename.mockReset();
     mockChmod.mockReset();
+    mockResolveAliasForModel.mockReset();
 
     mockReadFile.mockImplementation(() => Promise.resolve("{}"));
     mockWriteFile.mockImplementation(() => Promise.resolve());
     mockRename.mockImplementation(() => Promise.resolve());
     mockChmod.mockImplementation(() => Promise.resolve());
+    mockResolveAliasForModel.mockImplementation(async (_modelId: string, aliases: string[]) => aliases[0] ?? "work");
   });
 
   test("loads missing ledger as empty object", async () => {
@@ -206,5 +231,70 @@ describe("ledger state manager", () => {
     await Promise.all([firstUpdate, secondUpdate]);
 
     expect(await getAccount("work")).toEqual(personalAccount);
+  });
+
+  describe("fail-fast and resolution", () => {
+    test("getTokenForAlias returns account data for authenticated alias", async () => {
+      await setAccount("work", workAccount);
+
+      expect(await getTokenForAlias("work")).toEqual(workAccount);
+    });
+
+    test("getTokenForAlias throws helpful guidance for unauthenticated alias", async () => {
+      const message = await getErrorMessage(() => getTokenForAlias("nonexistent"));
+
+      expect(message).toContain("Run 'opencode auth multi-copilot' to authenticate");
+    });
+
+    test("getTokenForAlias error includes the missing alias name", async () => {
+      const message = await getErrorMessage(() => getTokenForAlias("nonexistent"));
+
+      expect(message).toContain("'nonexistent'");
+    });
+
+    test("resolveAccountForModel returns alias and account for explicit mapping", async () => {
+      await setAccount("work", workAccount);
+      await setAccount("personal", personalAccount);
+      mockResolveAliasForModel.mockImplementation(async () => "work");
+
+      expect(await resolveAccountForModel("claude-opus-4.6")).toEqual({
+        alias: "work",
+        account: workAccount,
+      });
+      expect(mockResolveAliasForModel).toHaveBeenCalledWith("claude-opus-4.6", ["work", "personal"]);
+    });
+
+    test("resolveAccountForModel throws when no accounts are authenticated", async () => {
+      const message = await getErrorMessage(() => resolveAccountForModel("claude-opus-4.6"));
+
+      expect(message).toContain("No accounts authenticated");
+      expect(mockResolveAliasForModel).not.toHaveBeenCalled();
+    });
+
+    test("resolveAccountForModel uses the resolver result when one alias is available", async () => {
+      await setAccount("personal", personalAccount);
+
+      expect(await resolveAccountForModel("gpt-4.1")).toEqual({
+        alias: "personal",
+        account: personalAccount,
+      });
+      expect(mockResolveAliasForModel).toHaveBeenCalledWith("gpt-4.1", ["personal"]);
+    });
+
+    test("error messages stay in British English", async () => {
+      const missingAliasMessage = await getErrorMessage(() => getTokenForAlias("nonexistent"));
+      const noAccountsMessage = await getErrorMessage(() => resolveAccountForModel("claude-opus-4.6"));
+
+      expect(missingAliasMessage).toBe(
+        "No authentication found for alias 'nonexistent'. Run 'opencode auth multi-copilot' to authenticate this account."
+      );
+      expect(noAccountsMessage).toBe(
+        "No accounts authenticated. Run 'opencode auth multi-copilot' to set up your first account."
+      );
+      expect(missingAliasMessage).not.toContain("authorize");
+      expect(noAccountsMessage).not.toContain("authorize");
+      expect(missingAliasMessage).not.toContain("initialize");
+      expect(noAccountsMessage).not.toContain("initialize");
+    });
   });
 });
