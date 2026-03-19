@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { AuthHook, AuthOuathResult, PluginInput } from "@opencode-ai/plugin";
 
 import { AliasSchema } from "./schemas.js";
+import { normaliseDomain } from "./provider.js";
 
 const OAUTH_POLLING_SAFETY_MARGIN_MS = 3000;
 const USER_AGENT = "opencode-multi-copilot";
@@ -25,10 +26,6 @@ type LedgerModule = {
     account: AccountRecord;
   }>;
 };
-
-function normaliseDomain(url: string): string {
-  return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
-}
 
 function getCopilotBaseUrl(enterpriseUrl?: string): string {
   if (!enterpriseUrl) {

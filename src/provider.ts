@@ -74,7 +74,7 @@ export function detectVision(body: unknown, url?: string): boolean {
           )
       );
     }
-  } catch {}
+  } catch (_e) {}
 
   return false;
 }
@@ -102,7 +102,7 @@ export function detectAgent(body: unknown, url?: string): boolean {
         (last.content as ContentPart[]).some((part) => part.type !== "tool_result");
       return !(last?.role === "user" && hasNonToolCalls);
     }
-  } catch {}
+  } catch (_e) {}
 
   return false;
 }
@@ -115,7 +115,7 @@ export function createCustomFetch(modelId: string): (request: string | URL | Req
     let body: unknown;
     try {
       body = typeof init?.body === "string" ? JSON.parse(init.body) : init?.body;
-    } catch {}
+    } catch (_e) {}
 
     const isVision = detectVision(body, url);
     const isAgent = detectAgent(body, url);
