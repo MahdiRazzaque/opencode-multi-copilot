@@ -24,7 +24,7 @@ export function extractRequestedModel(body: string | null | undefined): string |
     }
 
     return null;
-  } catch {
+  } catch (_e) {
     return null;
   }
 }

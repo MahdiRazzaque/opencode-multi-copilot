@@ -49,7 +49,7 @@ export class MappingStore {
   private async ensureInitialised(): Promise<void> {
     try {
       await stat(this.options.filePath);
-    } catch {
+    } catch (_e) {
       await mkdir(dirname(this.options.filePath), { recursive: true });
       await writeFile(this.options.filePath, DEFAULT_MAPPING_FILE, "utf8");
     }

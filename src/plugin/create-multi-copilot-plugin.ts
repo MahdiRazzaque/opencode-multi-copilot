@@ -100,7 +100,7 @@ export async function createMultiCopilotPlugin(_input: PluginInput): Promise<Hoo
                     provider: MULTI_COPILOT_PROVIDER,
                     type: "success" as const,
                   };
-                } catch {
+                } catch (_e) {
                   return { type: "failed" as const };
                 }
               },
