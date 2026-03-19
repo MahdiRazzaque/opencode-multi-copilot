@@ -196,3 +196,136 @@ describe("Config paths and auto-generation", () => {
     });
   });
 });
+
+describe("readMappingConfig", () => {
+  beforeEach(async () => {
+    const { clearMappingCache } = await import("./config.js");
+
+    mockStat.mockReset();
+    mockReadFile.mockReset();
+    clearMappingCache();
+  });
+
+  test("reads and parses mapping file", async () => {
+    const { readMappingConfig, clearMappingCache } = await import("./config.js");
+    clearMappingCache();
+
+    mockStat.mockImplementation(() => Promise.resolve({ mtimeMs: 1000 }));
+    mockReadFile.mockImplementation(() =>
+      Promise.resolve(JSON.stringify({ default_account: "work", mappings: {} }))
+    );
+
+    const result = await readMappingConfig();
+    expect(result.default_account).toBe("work");
+    expect(result.mappings).toEqual({});
+  });
+
+  test("returns cached result when mtime unchanged", async () => {
+    const { readMappingConfig, clearMappingCache } = await import("./config.js");
+    clearMappingCache();
+
+    mockStat.mockImplementation(() => Promise.resolve({ mtimeMs: 2000 }));
+    mockReadFile.mockImplementation(() =>
+      Promise.resolve(JSON.stringify({ default_account: "cached", mappings: {} }))
+    );
+
+    await readMappingConfig();
+    const readCount1 = mockReadFile.mock.calls.length;
+
+    await readMappingConfig();
+    const readCount2 = mockReadFile.mock.calls.length;
+
+    expect(readCount2).toBe(readCount1);
+  });
+
+  test("re-reads file when mtime has changed", async () => {
+    const { readMappingConfig, clearMappingCache } = await import("./config.js");
+    clearMappingCache();
+
+    mockStat.mockImplementation(() => Promise.resolve({ mtimeMs: 3000 }));
+    mockReadFile.mockImplementation(() =>
+      Promise.resolve(JSON.stringify({ default_account: "v1", mappings: {} }))
+    );
+    await readMappingConfig();
+
+    mockStat.mockImplementation(() => Promise.resolve({ mtimeMs: 4000 }));
+    mockReadFile.mockImplementation(() =>
+      Promise.resolve(JSON.stringify({ default_account: "v2", mappings: {} }))
+    );
+    const result = await readMappingConfig();
+
+    expect(result.default_account).toBe("v2");
+  });
+
+  test("throws descriptive error if file content is invalid JSON", async () => {
+    const { readMappingConfig, clearMappingCache } = await import("./config.js");
+    clearMappingCache();
+
+    mockStat.mockImplementation(() => Promise.resolve({ mtimeMs: 5000 }));
+    mockReadFile.mockImplementation(() => Promise.resolve("not valid json"));
+
+    expect(readMappingConfig()).rejects.toThrow();
+  });
+
+  test("throws descriptive error if file fails Zod validation", async () => {
+    const { readMappingConfig, clearMappingCache } = await import("./config.js");
+    clearMappingCache();
+
+    mockStat.mockImplementation(() => Promise.resolve({ mtimeMs: 6000 }));
+    mockReadFile.mockImplementation(() =>
+      Promise.resolve(JSON.stringify({ wrong_field: "bad" }))
+    );
+
+    expect(readMappingConfig()).rejects.toThrow();
+  });
+});
+
+describe("resolveAliasForModel", () => {
+  test("returns explicit mapping when found", async () => {
+    const { resolveAliasForModel } = await import("./config.js");
+
+    const mapping = {
+      default_account: "default",
+      mappings: { "github-copilot/claude-opus-4.6": "work" },
+    };
+
+    const result = resolveAliasForModel("claude-opus-4.6", ["work", "personal"], mapping);
+    expect(result).toBe("work");
+  });
+
+  test("returns default_account when no explicit mapping", async () => {
+    const { resolveAliasForModel } = await import("./config.js");
+
+    const mapping = {
+      default_account: "personal",
+      mappings: {},
+    };
+
+    const result = resolveAliasForModel("some-model", ["work", "personal"], mapping);
+    expect(result).toBe("personal");
+  });
+
+  test("returns first auth alias when no explicit mapping and no default_account", async () => {
+    const { resolveAliasForModel } = await import("./config.js");
+
+    const mapping = {
+      default_account: "",
+      mappings: {},
+    };
+
+    const result = resolveAliasForModel("some-model", ["work", "personal"], mapping);
+    expect(result).toBe("work");
+  });
+
+  test("returns undefined when no mapping, no default, and no auth aliases", async () => {
+    const { resolveAliasForModel } = await import("./config.js");
+
+    const mapping = {
+      default_account: "",
+      mappings: {},
+    };
+
+    const result = resolveAliasForModel("some-model", [], mapping);
+    expect(result).toBeUndefined();
+  });
+});
