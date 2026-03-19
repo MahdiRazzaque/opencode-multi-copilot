@@ -1,0 +1,10 @@
+Bundled 81 modules in 16ms
+
+  index.js  0.54 MB  (entry point)
+
+
+=== dist/ contents ===
+total 540
+drwxr-xr-x 2 mahdi mahdi   4096 Mar 19 15:44 .
+drwxr-xr-x 7 mahdi mahdi   4096 Mar 19 15:44 ..
+-rw-r--r-- 1 mahdi mahdi 541699 Mar 19 17:37 index.js

@@ -134,7 +134,7 @@ async function mirrorGithubCopilotModels(input: PluginInput, provider: Parameter
     return;
   }
 
-  const models = provider.models as Record<string, any>;
+  const models = provider.models as Record<string, unknown>;
 
   for (const [modelId, modelInfo] of Object.entries(githubCopilot.models)) {
     const mirroredId = `multi-copilot/${modelId.replace(/^github-copilot\//, "")}`;
@@ -292,7 +292,7 @@ export function createAuthHook(input: PluginInput): AuthHook {
                     access: data.access_token,
                     expires: 0,
                     ...(urls.enterpriseUrl ? { enterpriseUrl: urls.enterpriseUrl } : {}),
-                  } as any;
+                  } as { type: "success"; refresh: string; access: string; expires: number; enterpriseUrl?: string };
                 }
 
                 if (data.error === "authorization_pending") {
