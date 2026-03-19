@@ -32,6 +32,7 @@ const {
   detectAgent,
   detectVision,
   normaliseDomain,
+  createMultiCopilotProvider,
 } = await import("./provider.js");
 
 describe("provider helpers", () => {
@@ -342,5 +343,50 @@ describe("provider helpers", () => {
 
     expect(constructBaseURL(personalAccount)).toBe("https://api.github.com");
     expect(constructBaseURL(enterpriseAccount)).toBe("https://copilot-api.github.mycompany.com");
+  });
+});
+
+describe("createMultiCopilotProvider", () => {
+  beforeEach(() => {
+    fetchMock.mockClear();
+  });
+
+  const mockAccount = {
+    access_token: "test-token",
+    refresh_token: "refresh-token",
+    expires: 0,
+    enterpriseUrl: "",
+  };
+
+  test("returns an object with .chatModel method", () => {
+    const provider = createMultiCopilotProvider("gpt-4", mockAccount);
+    expect(typeof provider.chatModel).toBe("function");
+  });
+
+  test("returns an object with .languageModel method", () => {
+    const provider = createMultiCopilotProvider("gpt-4", mockAccount);
+    expect(typeof provider.languageModel).toBe("function");
+  });
+
+  test("uses the correct baseURL from constructBaseURL", async () => {
+    const enterpriseAccount = {
+      ...mockAccount,
+      enterpriseUrl: "https://github.example.com",
+    };
+    const provider = createMultiCopilotProvider("gpt-4", enterpriseAccount);
+    const model = provider.chatModel("gpt-4");
+
+    try {
+      await model.doGenerate({
+        prompt: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+      } as any);
+    } catch (e) {
+    }
+
+    expect(fetchMock).toHaveBeenCalled();
+    const call = fetchMock.mock.calls[0] as [string | URL | Request, RequestInit] | undefined;
+    const url = call?.[0] instanceof Request ? call[0].url : call?.[0].toString();
+    expect(typeof url).toBe("string");
+    expect(url).toContain("https://copilot-api.github.example.com");
   });
 });

@@ -69,3 +69,23 @@
 - createAuthHook(input) from auth.ts already handles model mirroring — index.ts just wires it in
 - Test pattern: mock.module("./config.js", ...) and mock.module("./auth.js", ...) BEFORE await import("./index.js")
 - The config hook must handle undefined config.provider (use `config.provider ?? {}`)
+
+## [2026-03-19] Task: T11
+
+- Full test suite runs successfully with 93 total tests across 6 modules (7+20+12+14+22+18), each file run individually
+- British English audit: CLEAN — zero violations. `authorize` method (API contract), `authorization_pending` (GitHub API string), `headers.authorization` (JS property key) all acceptable
+- Build output: dist/index.js (0.54 MB) generated successfully via `bun build src/index.ts --outdir dist --target bun`
+- Known Bun 1.3.11 limitation: mock bleeding between test files when running `bun test` all at once; each file passes individually — acceptable known limitation
+- Fixed `as any` in production files: replaced with typed interfaces (`ContentPart`, `RequestItem`, `RequestBody`, `isRequestBody` guard) in provider.ts; used `Record<string, unknown>` and explicit type assertion in auth.ts
+- Zero @ts-ignore across all source files
+- No circular dependencies: schemas → config → ledger → {provider, auth} → index
+
+## [2026-03-19] Task: F4
+
+- Scope audit result: REJECT — 6/11 tasks match the plan exactly; the main drift is that live request/provider logic is split across `src/auth.ts` and an unwired `src/provider.ts`
+- `src/provider.ts` is currently production-orphaned: no `./provider.js` import exists in `src/*.ts`, so task 8/9 provider helpers are tested but not part of the runtime wiring
+- `src/config.ts` keeps the mtime cache, but its exported resolver contract drifted to `resolveAliasForModel(modelId, authAliases, mapping)` and lacks the planned in-flight concurrent read guard
+- `src/ledger.ts` meets locking/redaction goals, but `setAccount()` and `removeAccount()` do not return the updated ledger the task plan required
+- Git history contains an extra unplanned `dc18c56 fix(config)` commit after the task sequence, which should be treated as plan contamination during future audits
+
+- F1 audit (2026-03-19): Passing tests and typecheck did not guarantee plan compliance here; the unused `src/provider.ts` and missing ledger `toJSON()` redaction are both requirement-level gaps.

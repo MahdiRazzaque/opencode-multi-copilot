@@ -1,3 +1,5 @@
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import type { OpenAICompatibleProvider } from "@ai-sdk/openai-compatible";
 import { resolveAccountForModel } from "./ledger.js";
 import type { AccountData } from "./schemas.js";
 
@@ -135,4 +137,18 @@ export function createCustomFetch(modelId: string): (request: string | URL | Req
 
     return fetch(request, { ...init, headers });
   };
+}
+
+export function createMultiCopilotProvider(
+  modelId: string,
+  account: AccountData
+): OpenAICompatibleProvider {
+  const baseURL = constructBaseURL(account);
+  const customFetch = createCustomFetch(modelId);
+
+  return createOpenAICompatible({
+    name: "multi-copilot",
+    baseURL,
+    fetch: customFetch as typeof fetch,
+  });
 }
