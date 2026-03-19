@@ -1,0 +1,11 @@
+Task 6 atomic write evidence
+Date: 2026-03-19
+Command: `bun test src/ledger.test.ts`
+Result: 7 pass, 0 fail, 25 expect() calls
+
+Verified in `src/ledger.test.ts` test `saves ledger with atomic write pattern and secure permissions`:
+- `saveLedger({ work: workAccount })` performs exactly one `writeFile`, one `rename`, and one `chmod`
+- the `writeFile` target contains `.tmp`
+- the `rename` source contains `.tmp`
+- the `rename` destination does not contain `.tmp` and is the final auth path
+- `chmod` is called with the final auth path and mode `0o600`

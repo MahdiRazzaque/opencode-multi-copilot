@@ -1,0 +1,16 @@
+Task 6 concurrency evidence
+Date: 2026-03-19
+Command: `bun test src/ledger.test.ts`
+Result: 7 pass, 0 fail, 25 expect() calls
+
+Verified in `src/ledger.test.ts`:
+- `allows concurrent writes for different aliases`
+  - starts `setAccount("work", workAccount)` and `setAccount("personal", personalAccount)` together
+  - holds both mocked `writeFile` calls open
+  - confirms `mockWriteFile.mock.calls.length === 2` before either write resolves
+  - resolves both writes and confirms both aliases remain retrievable
+- `serialises concurrent writes for the same alias`
+  - starts two `setAccount("work", ...)` calls together
+  - confirms only one mocked `writeFile` call exists while the first write is still blocked
+  - resolves the first write, then confirms the second write starts afterwards
+  - final stored `work` account matches the second update
