@@ -1,0 +1,13 @@
+Task 5 evidence: OAuth callback polling
+
+Verification command:
+- `bun test src/auth.test.ts`
+
+Observed result:
+- 7 pass, 0 fail
+
+Covered assertions:
+- Callback polls `https://github.com/login/oauth/access_token`
+- Poll request body includes `grant_type: "urn:ietf:params:oauth:grant-type:device_code"`
+- Pending response triggers `sleep(5000)` for interval 2 + safety margin
+- Success response returns `{ type: "success", refresh: "ghu_callback_token", access: "ghu_callback_token", expires: 0 }`

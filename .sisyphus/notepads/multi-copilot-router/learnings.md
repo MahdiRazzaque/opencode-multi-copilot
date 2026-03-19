@@ -41,6 +41,13 @@
 - Co-locate tests: `src/*.test.ts`
 - Evidence: `.sisyphus/evidence/task-{N}-{scenario-slug}.{ext}`
 
+### Task 5 Auth Learnings
+- `src/auth.test.ts` can safely mock the unfinished ledger module with `mock.module("../src/ledger.js", ...)` before `await import("./auth.js")`
+- The auth loader can keep ledger access dynamic with `await import("./ledger.js")`, which avoids a static dependency on Task 6 while still letting tests intercept the module
+- The auth loader should mirror `github-copilot` models from `input.client.provider.list()` first, then resolve per-request tokens from the ledger when the request body contains a `multi-copilot/*` model id
+- Strict diagnostics are cleaner if the loader fetch wrapper uses a plain `Record<string, string>` header object rather than a `Headers` instance, because the tests inspect injected `Authorization` values directly
+- Enterprise auth state can flow through `enterpriseUrl` on OAuth auth records, and the loader should derive `baseURL` as `https://copilot-api.${domain}` while personal auth stays on `https://api.github.com`
+
 ## Task 6 Learnings
 
 - `src/ledger.ts` uses module-level `cachedLedger` state plus a `loadLedgerPromise` guard so concurrent reads share one parsed ledger object instead of racing separate loads

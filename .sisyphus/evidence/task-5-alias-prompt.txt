@@ -1,0 +1,14 @@
+Task 5 evidence: Alias prompt validation
+
+Verification command:
+- `bun test src/auth.test.ts`
+
+Observed result:
+- 7 pass, 0 fail
+
+Covered assertions:
+- Alias prompt key is `alias`
+- Alias prompt validates through `AliasSchema` behaviour
+- `validate("work")` returns `undefined`
+- `validate("my alias!")` returns the exact AC3 message:
+  `Invalid alias. Use only alphanumeric characters, hyphens, and underscores.`
