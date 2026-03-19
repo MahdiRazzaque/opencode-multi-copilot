@@ -59,3 +59,13 @@
 
 - `src/provider.ts` already matched the T8 enterprise URL contract, so Task 9 only needed tests for protocol-only normalisation, path preservation, and explicit personal-versus-enterprise base URL routing
 - Enterprise URL normalisation must stay identical to the upstream copilot helper logic: strip only the protocol and a single trailing slash, while preserving any path suffixes
+
+## Task 10 Learnings
+
+## [2026-03-19] Task: T10
+
+- `src/index.ts` wires all modules: calls ensureMappingConfig(), ensureAuthLedger() on init, then returns { config, auth } hooks
+- Config hook only mutates config object (no I/O) — seeds config.provider["multi-copilot"] = { name: "Multi Copilot", env: [] }
+- createAuthHook(input) from auth.ts already handles model mirroring — index.ts just wires it in
+- Test pattern: mock.module("./config.js", ...) and mock.module("./auth.js", ...) BEFORE await import("./index.js")
+- The config hook must handle undefined config.provider (use `config.provider ?? {}`)
