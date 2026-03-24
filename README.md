@@ -1,18 +1,21 @@
 # Opencode Multi-Copilot
 
-`opencode-multi-copilot` is an OpenCode plugin that adds a `multi-copilot` provider for routing requests across multiple GitHub Copilot accounts.
+`opencode-multi-copilot` is an OpenCode plugin that registers a `multi-copilot` provider for routing requests across multiple GitHub Copilot accounts.
 
-It keeps more than one Copilot account authenticated at the same time, maps model IDs to account aliases, reloads routing changes without restarting OpenCode, and refreshes tokens when GitHub rotates them.
+The plugin maintains a local ledger of authenticated account aliases, resolves each requested model against a routing file, and forwards requests to either the public Copilot API or a GitHub Enterprise Copilot host.
 
-## What it does
+Additional project documentation lives in `docs/README.md`.
 
-- Registers a new OpenCode provider called `multi-copilot`
-- Authenticates multiple GitHub Copilot accounts with the GitHub Device Code flow
-- Stores account tokens in `~/.config/opencode/multi-copilot-auth.json`
+## Capabilities
+
+- Registers a new OpenCode provider named `multi-copilot`
+- Supports multiple authenticated GitHub Copilot aliases on the same machine
+- Stores authentication state in `~/.config/opencode/multi-copilot-auth.json`
 - Seeds and reloads routing rules from `~/.config/opencode/multi-copilot-mapping.json`
-- Routes requests by requested model ID
+- Resolves requests by requested model ID and configured alias mapping
 - Falls back to `default_account` or the first authenticated alias when a model is not mapped
-- Supports GitHub Enterprise hostnames and rewrites requests to `copilot-api.<enterprise-domain>` when needed
+- Supports GitHub Enterprise device authorisation and request routing
+- Optionally mirrors the native `github-copilot` model catalogue when `model_mirroring` is set to `auto`
 
 ## Requirements
 
@@ -22,20 +25,16 @@ It keeps more than one Copilot account authenticated at the same time, maps mode
 
 ## Installation
 
-Clone this repository, install dependencies, and build:
-
 ```bash
-git clone https://github.com/your-user/opencode-multi-copilot.git
+git clone https://github.com/MahdiRazzaque/opencode-multi-copilot.git
 cd opencode-multi-copilot
 bun install
 bun run build
 ```
 
-Then register the plugin with OpenCode using one of the methods below.
+Register the built plugin with OpenCode using one of the following approaches.
 
-### Method 1: Absolute path in OpenCode config
-
-Reference the built entry point directly in `~/.config/opencode/opencode.json` (or your project `opencode.json`):
+### Absolute path in OpenCode config
 
 ```json
 {
@@ -44,64 +43,41 @@ Reference the built entry point directly in `~/.config/opencode/opencode.json` (
 }
 ```
 
-### Method 2: Copy into the plugins directory
-
-Copy the built file into one of the directories OpenCode auto-loads on startup:
+### Copy into the plugins directory
 
 ```bash
 cp dist/index.js ~/.config/opencode/plugins/opencode-multi-copilot.js
 ```
 
-You will need to re-copy after each rebuild.
-
-### Method 3: Symlink into the plugins directory (recommended)
-
-Create a symbolic link so rebuilds are picked up automatically:
+### Symlink into the plugins directory
 
 ```bash
 ln -s "$(pwd)/dist/index.js" ~/.config/opencode/plugins/opencode-multi-copilot.js
 ```
 
-After a `bun run build`, OpenCode will use the updated plugin on next startup without any extra steps.
+The `multi-copilot` provider exposes model IDs without the `github-copilot/` prefix, so a mapping entry such as `github-copilot/claude-opus-4.6` is selected in OpenCode as `multi-copilot/claude-opus-4.6`.
 
-## OpenCode configuration
+## First-time authorisation
 
-OpenCode merges config from `~/.config/opencode/opencode.json` and your project `opencode.json`, with the project config taking precedence.
-
-Add the plugin and optionally set the default model to the new provider:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-multi-copilot"],
-  "model": "multi-copilot/claude-opus-4.6"
-}
-```
-
-`multi-copilot` uses the GitHub Copilot model catalogue, so model IDs should match the GitHub Copilot models available in your OpenCode installation.
-
-## First-time setup
-
-Authenticate each account alias you want to use:
+Authenticate each alias with:
 
 ```bash
-opencode auth multi-copilot
+opencode auth login --provider multi-copilot
 ```
 
-During authentication the plugin will:
+The auth flow prompts for:
 
-1. Ask for an alias such as `work` or `personal`
-2. Optionally ask for a GitHub Enterprise hostname
-3. Start the GitHub Device Code flow
-4. Persist the resulting token set to `~/.config/opencode/multi-copilot-auth.json`
+1. An alias such as `work` or `personal`
+2. A deployment type: `GitHub.com` or `GitHub Enterprise`
+3. An enterprise URL or domain when enterprise mode is selected
 
-Aliases must match this rule:
+Aliases must satisfy:
 
 ```text
 /^[a-zA-Z0-9_-]+$/
 ```
 
-Invalid aliases return this validation message:
+Invalid aliases return:
 
 ```text
 Invalid alias. Use only alphanumeric characters, hyphens, and underscores.
@@ -109,13 +85,22 @@ Invalid alias. Use only alphanumeric characters, hyphens, and underscores.
 
 ## Routing configuration
 
-The plugin seeds `~/.config/opencode/multi-copilot-mapping.json` if it does not exist.
+If the mapping file does not exist, the plugin creates `~/.config/opencode/multi-copilot-mapping.json` with this default shape:
 
-Example:
+```json
+{
+  "default_account": "",
+  "model_mirroring": "skip",
+  "mappings": {}
+}
+```
+
+Example populated configuration:
 
 ```json
 {
   "default_account": "personal",
+  "model_mirroring": "auto",
   "mappings": {
     "github-copilot/claude-opus-4.6": "work",
     "github-copilot/gpt-5": "personal"
@@ -125,66 +110,45 @@ Example:
 
 Rules:
 
-- `mappings` routes specific model IDs to account aliases, keys must use the `github-copilot/[model-name]` format
-- `default_account` is used when a model is not mapped
-- if `default_account` is unset, the first authenticated alias is used
-- mapping changes are reloaded on each intercepted request, so you do not need to restart OpenCode
+- `mappings` keys must use the `github-copilot/[model-name]` format
+- `default_account` is used when a model is not explicitly mapped
+- if `default_account` is empty, the first authenticated alias is used
+- routing changes are picked up on subsequent requests without restarting OpenCode
+- `model_mirroring` accepts `skip` or `auto`
 
-## How to use it
+## Runtime behaviour
 
-1. Install and enable the plugin
-2. Run `opencode auth multi-copilot` once per alias
-3. Update `~/.config/opencode/multi-copilot-mapping.json`
-4. Choose a `multi-copilot/...` model in OpenCode
-5. Use OpenCode normally
+When OpenCode sends a request through `multi-copilot`, the plugin:
 
-When a request is sent, the plugin reads the request body, extracts the requested model, resolves the correct alias, loads or refreshes the token, and injects the matching `Authorization: Bearer ...` header before forwarding the request.
+1. Extracts the requested model from the JSON request body
+2. Resolves the target alias from the routing file
+3. Loads the account record from the local auth ledger
+4. Rewrites the base URL for GitHub Enterprise accounts when required
+5. Adds request headers such as `Authorization`, `x-initiator`, `User-Agent`, and `Openai-Intent`
+6. Adds `Copilot-Vision-Request: true` when image input is detected
 
-If a model points to an alias that has not been authenticated, the plugin fails fast with guidance to run:
-
-```bash
-opencode auth multi-copilot
-```
+If a mapped alias has not been authenticated, the plugin fails fast and instructs the user to run `opencode auth multi-copilot`.
 
 ## GitHub Enterprise support
 
-If an account is authenticated against GitHub Enterprise, the plugin uses these OAuth endpoints:
+For enterprise accounts, the plugin uses:
 
 - `https://<enterprise-host>/login/device/code`
 - `https://<enterprise-host>/login/oauth/access_token`
-
-Copilot API requests for that account are routed to:
-
 - `https://copilot-api.<enterprise-host>`
 
 ## Development
 
-Install dependencies:
-
 ```bash
 bun install
-```
-
-Run the test suite:
-
-```bash
 bun test
-```
-
-Run the typecheck:
-
-```bash
 bun run typecheck
-```
-
-Build the plugin:
-
-```bash
 bun run build
 ```
 
-## Notes
+## Implementation notes
 
-- Auth state is written with owner-only permissions where the platform supports `0600`
-- Token refresh uses the stored refresh token and fails explicitly if the token is expired or revoked
-- You can override the GitHub OAuth client ID with `MULTI_COPILOT_GITHUB_CLIENT_ID` if you need to test against a different OAuth application
+- Auth state is written with `0600` permissions where supported
+- Mapping reads are cached by file modification time to minimise repeat I/O
+- The current implementation stores the device-flow token as both `access_token` and `refresh_token`
+- The current implementation resolves and injects stored tokens, but does not yet implement a separate refresh-token exchange flow
