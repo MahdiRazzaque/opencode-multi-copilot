@@ -14,8 +14,11 @@ export const AccountDataSchema = z.object({
   enterpriseUrl: z.string().default(""),
 });
 
+export const ModelMirroringSchema = z.enum(["auto", "skip"]).default("skip");
+
 export const MappingConfigSchema = z.object({
   default_account: z.string(),
+  model_mirroring: ModelMirroringSchema,
   mappings: z.record(z.string().startsWith("github-copilot/"), AliasSchema),
 });
 
@@ -23,9 +26,11 @@ export const AuthLedgerSchema = z.record(AliasSchema, AccountDataSchema);
 
 export const EMPTY_MAPPING_CONFIG = {
   default_account: "",
+  model_mirroring: "skip",
   mappings: {},
 } as const;
 
 export type MappingConfig = z.infer<typeof MappingConfigSchema>;
+export type ModelMirroring = z.infer<typeof ModelMirroringSchema>;
 export type AuthLedger = z.infer<typeof AuthLedgerSchema>;
 export type AccountData = z.infer<typeof AccountDataSchema>;

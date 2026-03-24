@@ -48,6 +48,7 @@ describe("MappingConfigSchema", () => {
       mappings: {},
     });
     expect(result.default_account).toBe("");
+    expect(result.model_mirroring).toBe("skip");
     expect(result.mappings).toEqual({});
   });
 
@@ -60,6 +61,42 @@ describe("MappingConfigSchema", () => {
     });
     expect(result.default_account).toBe("work");
     expect(result.mappings["github-copilot/claude-opus-4.6"]).toBe("work");
+  });
+
+  test("accepts config with model_mirroring set to auto", () => {
+    const result = MappingConfigSchema.parse({
+      default_account: "",
+      model_mirroring: "auto",
+      mappings: {},
+    });
+    expect(result.model_mirroring).toBe("auto");
+  });
+
+  test("accepts config with model_mirroring set to skip", () => {
+    const result = MappingConfigSchema.parse({
+      default_account: "",
+      model_mirroring: "skip",
+      mappings: {},
+    });
+    expect(result.model_mirroring).toBe("skip");
+  });
+
+  test("defaults model_mirroring to skip when not provided", () => {
+    const result = MappingConfigSchema.parse({
+      default_account: "",
+      mappings: {},
+    });
+    expect(result.model_mirroring).toBe("skip");
+  });
+
+  test("rejects invalid model_mirroring value", () => {
+    expect(() =>
+      MappingConfigSchema.parse({
+        default_account: "",
+        model_mirroring: "invalid",
+        mappings: {},
+      })
+    ).toThrow();
   });
 
   test("rejects missing default_account key", () => {
@@ -163,6 +200,7 @@ describe("AccountDataSchema", () => {
 describe("EMPTY_MAPPING_CONFIG", () => {
   test("has correct shape", () => {
     expect(EMPTY_MAPPING_CONFIG.default_account).toBe("");
+    expect(EMPTY_MAPPING_CONFIG.model_mirroring).toBe("skip");
     expect(EMPTY_MAPPING_CONFIG.mappings).toEqual({});
   });
 
