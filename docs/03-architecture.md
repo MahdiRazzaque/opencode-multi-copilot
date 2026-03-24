@@ -9,7 +9,7 @@ The plugin is split across five runtime modules plus one schema module.
 | `src/index.ts` | Bootstraps the plugin and registers provider metadata | Default export `MultiCopilotPlugin(input)` |
 | `src/auth.ts` | Defines the auth hook, wrapped fetch, model mirroring, and device flow | `createAuthHook(input)` |
 | `src/config.ts` | Creates config files, reads mappings, and caches mapping state | `ensureMappingConfig()`, `readMappingConfig()` |
-| `src/ledger.ts` | Loads and stores alias records with per-alias write serialisation | `getTokenForAlias()`, `resolveAccountForModel()` |
+| `src/ledger.ts` | Loads and stores alias records with file-wide write serialisation | `getTokenForAlias()`, `resolveAccountForModel()` |
 | `src/provider.ts` | Resolves API base URLs and inspects request payloads | `constructBaseURL()`, `detectVision()`, `detectAgent()` |
 | `src/schemas.ts` | Enforces runtime schemas for user-controlled JSON data | `MappingConfigSchema`, `AuthLedgerSchema` |
 
@@ -54,12 +54,12 @@ The architecture uses two persistent state files and one optional cache file.
 | State file | Owner module | Access pattern |
 | --- | --- | --- |
 | `multi-copilot-mapping.json` | `src/config.ts` | Read with modification-time caching |
-| `multi-copilot-auth.json` | `src/ledger.ts` | Read once, cached in memory, updated atomically |
+| `multi-copilot-auth.json` | `src/ledger.ts` | Read once, cached in memory, updated under a file-wide write queue |
 | `multi-copilot-models-cache.json` | `src/config.ts` | Best-effort write during mirroring |
 
 ## Concurrency model
 
-`src/ledger.ts` prevents overlapping writes for the same alias by using an in-memory promise queue per alias. Different aliases can still be written concurrently.
+`src/config.ts` and `src/ledger.ts` serialise writes per state file with an in-memory promise queue. Each write uses a unique temp file before rename, so concurrent updates in the same process do not clobber each other or collide on a shared `*.tmp` path.
 
 ## Error strategy
 
