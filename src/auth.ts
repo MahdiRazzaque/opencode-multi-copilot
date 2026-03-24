@@ -3,7 +3,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { AuthHook, AuthOuathResult, PluginInput } from "@opencode-ai/plugin";
 
 import { AliasSchema } from "./schemas.js";
-import { normaliseDomain, constructBaseURL } from "./provider.js";
+import { normaliseDomain, constructBaseURL, detectVision, detectAgent } from "./provider.js";
+import { setAccount } from "./ledger.js";
+import { readMirroringMode, setDefaultAccountIfEmpty, writeCachedModelIds } from "./config.js";
 
 const OAUTH_POLLING_SAFETY_MARGIN_MS = 3000;
 const USER_AGENT = "opencode-multi-copilot";
@@ -115,22 +117,70 @@ async function loadLedgerModule(): Promise<LedgerModule> {
   return (await import("./ledger.js")) as unknown as LedgerModule;
 }
 
-async function mirrorGithubCopilotModels(input: PluginInput, provider: Parameters<NonNullable<AuthHook["loader"]>>[1]) {
-  const list = await input.client.provider.list();
-  const githubCopilot = (list.data?.all ?? []).find((item) => item.id === "github-copilot");
+async function fetchGithubCopilotModels(
+  serverUrl: URL
+): Promise<Record<string, unknown> | undefined> {
+  const url = new URL("/provider", serverUrl);
+  const response = await fetch(url, {
+    headers: { Accept: "application/json" },
+  });
 
-  if (!githubCopilot) {
+  if (!response.ok) {
+    return undefined;
+  }
+
+  const data = (await response.json()) as {
+    all?: Array<{ id: string; models: Record<string, unknown> }>;
+  };
+
+  const githubCopilot = (data.all ?? []).find((item) => item.id === "github-copilot");
+  return githubCopilot?.models;
+}
+
+async function mirrorGithubCopilotModels(
+  input: PluginInput,
+  provider: Parameters<NonNullable<AuthHook["loader"]>>[1]
+) {
+  const mode = await readMirroringMode();
+
+  if (mode !== "auto") {
     return;
   }
 
-  const models = provider.models as Record<string, unknown>;
+  if (!provider?.models) {
+    return;
+  }
 
-  for (const [modelId, modelInfo] of Object.entries(githubCopilot.models)) {
-    const mirroredId = `multi-copilot/${modelId.replace(/^github-copilot\//, "")}`;
-    models[mirroredId] = {
-      ...modelInfo,
-      id: mirroredId,
-    };
+  const target = provider.models as Record<string, unknown>;
+  const models = await fetchGithubCopilotModels(input.serverUrl);
+  if (models) {
+    const bareIds: string[] = [];
+    for (const [modelId, modelInfo] of Object.entries(models)) {
+      const bareId = modelId.replace(/^github-copilot\//, "");
+      bareIds.push(bareId);
+
+      // Strip provider-specific fields that would route requests through
+      // github-copilot's SDK instead of multi-copilot's custom fetch.
+      const { providerID, api, ...rest } = modelInfo as Record<string, unknown>;
+      const sourceApi = (api ?? {}) as Record<string, unknown>;
+
+      // Preserve existing config-hook models (they have full parsed structure);
+      // only add newly discovered models from github-copilot.
+      if (target[bareId]) {
+        continue;
+      }
+
+      target[bareId] = {
+        ...rest,
+        id: bareId,
+        providerID: "multi-copilot",
+        api: {
+          id: sourceApi.id ?? bareId,
+          npm: "@ai-sdk/openai-compatible",
+        },
+      };
+    }
+    await writeCachedModelIds(bareIds).catch(() => {});
   }
 }
 
@@ -138,45 +188,63 @@ export function createAuthHook(input: PluginInput): AuthHook {
   return {
     provider: "multi-copilot",
     async loader(auth, provider) {
-      await mirrorGithubCopilotModels(input, provider);
+      await mirrorGithubCopilotModels(input, provider).catch(() => {});
 
       const info = await auth();
       if (!info || info.type !== "oauth") {
         return {};
       }
 
+      const fetchFn = async function multiCopilotFetch(request: Request | URL | string, init?: RequestInit) {
+        const modelId = extractModelId(init?.body);
+
+        let account: AccountRecord = {
+          access_token: info.access,
+          refresh_token: info.refresh,
+          expires: info.expires,
+          enterpriseUrl: info.enterpriseUrl ?? "",
+        };
+
+        if (modelId) {
+          const ledger = await loadLedgerModule();
+          const resolved = await ledger.resolveAccountForModel(modelId);
+          account = await ledger.getTokenForAlias(resolved.alias);
+        }
+
+        const url = request instanceof URL ? request.href : request.toString();
+        let body: unknown;
+        try {
+          body = typeof init?.body === "string" ? JSON.parse(init.body) : init?.body;
+        } catch (_e) {}
+
+        const isVision = detectVision(body, url);
+        const isAgent = detectAgent(body, url);
+
+        const headers: Record<string, string> = {
+          "x-initiator": isAgent ? "agent" : "user",
+          ...(init?.headers as Record<string, string> | undefined),
+          "User-Agent": USER_AGENT,
+          Authorization: `Bearer ${account.refresh_token || account.access_token}`,
+          "Openai-Intent": "conversation-edits",
+        };
+
+        if (isVision) {
+          headers["Copilot-Vision-Request"] = "true";
+        }
+
+        delete headers.authorization;
+        delete headers["x-api-key"];
+
+        return fetch(rewriteRequestTarget(request, account), {
+          ...init,
+          headers,
+        });
+      };
+
       return {
         baseURL: constructBaseURL({ enterpriseUrl: info.enterpriseUrl ?? "" }),
         apiKey: "copilot",
-        async fetch(request: Request | URL | string, init?: RequestInit) {
-          const modelId = extractModelId(init?.body);
-
-          let account: AccountRecord = {
-            access_token: info.access,
-            refresh_token: info.refresh,
-            expires: info.expires,
-            enterpriseUrl: info.enterpriseUrl ?? "",
-          };
-
-          if (modelId) {
-            const ledger = await loadLedgerModule();
-            const resolved = await ledger.resolveAccountForModel(modelId);
-            account = await ledger.getTokenForAlias(resolved.alias);
-          }
-
-          const headers: Record<string, string> = {
-            ...(init?.headers as Record<string, string> | undefined),
-            "User-Agent": USER_AGENT,
-            Authorization: `Bearer ${account.refresh_token || account.access_token}`,
-          };
-          delete headers.authorization;
-          delete headers["x-api-key"];
-
-          return fetch(rewriteRequestTarget(request, account), {
-            ...init,
-            headers,
-          });
-        },
+        fetch: fetchFn,
       };
     },
     methods: [
@@ -275,6 +343,17 @@ export function createAuthHook(input: PluginInput): AuthHook {
                 };
 
                 if (data.access_token) {
+                  const alias = inputs.alias ?? "";
+                  const accountData = {
+                    access_token: data.access_token,
+                    refresh_token: data.access_token,
+                    expires: 0,
+                    enterpriseUrl: urls.enterpriseUrl ?? "",
+                  };
+
+                  await setAccount(alias, accountData);
+                  await setDefaultAccountIfEmpty(alias);
+
                   return {
                     type: "success",
                     refresh: data.access_token,

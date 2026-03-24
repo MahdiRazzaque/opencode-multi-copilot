@@ -17,6 +17,10 @@ const resolveAccountForModelMock = mock(async () => ({
     enterpriseUrl: "",
   },
 }));
+const setAccountMock = mock(async () => {});
+const setDefaultAccountIfEmptyMock = mock(async () => {});
+const readMirroringModeMock = mock(async (): Promise<"auto" | "skip"> => "skip");
+const readMappingConfigMock = mock(async () => ({ default_account: "", model_mirroring: "skip" as const, mappings: {} as Record<string, string> }));
 const fetchMock = mock(async (_input: unknown, _init?: RequestInit): Promise<Response> => {
   throw new Error("Unexpected fetch call");
 });
@@ -25,9 +29,35 @@ mock.module("node:timers/promises", () => ({
   setTimeout: sleepMock,
 }));
 
-mock.module("../src/ledger.js", () => ({
+mock.module("./ledger.js", () => ({
   getTokenForAlias: getTokenForAliasMock,
   resolveAccountForModel: resolveAccountForModelMock,
+  setAccount: setAccountMock,
+  clearLedgerCache: mock(() => {}),
+  loadLedger: mock(async () => ({})),
+  saveLedger: mock(async () => {}),
+  getAccount: mock(async () => undefined),
+  removeAccount: mock(async () => {}),
+  sanitiseLedger: mock(() => ({})),
+  toJSON: mock(() => ({})),
+}));
+
+mock.module("./config.js", () => ({
+  setDefaultAccountIfEmpty: setDefaultAccountIfEmptyMock,
+  readMirroringMode: readMirroringModeMock,
+  CONFIG_DIR: "/tmp/mock-config",
+  MAPPING_PATH: "/tmp/mock-config/multi-copilot-mapping.json",
+  AUTH_PATH: "/tmp/mock-config/multi-copilot-auth.json",
+  clearMappingCache: mock(() => {}),
+  ensureConfigDir: mock(async () => {}),
+  ensureMappingConfig: mock(async () => {}),
+  ensureAuthLedger: mock(async () => {}),
+  readMappingConfig: readMappingConfigMock,
+  writeCachedModelIds: mock(async () => {}),
+  readCachedModelIds: mock(async () => []),
+  resolveAliasForModel: mock(
+    (_modelId: string, _aliases: string[], _mapping: any) => undefined
+  ),
 }));
 
 globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -44,22 +74,12 @@ function createJsonResponse(body: unknown, init?: ResponseInit): Response {
   });
 }
 
-function createInput(providerListImpl?: () => Promise<{ data?: { all: any[] } }>) {
-  const providerListMock = mock(
-    providerListImpl ??
-      (() =>
-        Promise.resolve({
-          data: {
-            all: [],
-          },
-        }))
-  );
-
+function createInput() {
   return {
     input: {
       client: {
         provider: {
-          list: providerListMock,
+          list: mock(async () => ({ data: { all: [] } })),
         },
       },
       project: {},
@@ -68,7 +88,6 @@ function createInput(providerListImpl?: () => Promise<{ data?: { all: any[] } }>
       serverUrl: new URL("http://localhost:3000"),
       $: {},
     } as any,
-    providerListMock,
   };
 }
 
@@ -117,6 +136,14 @@ beforeEach(() => {
       enterpriseUrl: "",
     },
   }));
+  setAccountMock.mockReset();
+  setAccountMock.mockImplementation(async () => {});
+  setDefaultAccountIfEmptyMock.mockReset();
+  setDefaultAccountIfEmptyMock.mockImplementation(async () => {});
+  readMirroringModeMock.mockReset();
+  readMirroringModeMock.mockImplementation(async (): Promise<"auto" | "skip"> => "skip");
+  readMappingConfigMock.mockReset();
+  readMappingConfigMock.mockImplementation(async () => ({ default_account: "", model_mirroring: "skip" as const, mappings: {} as Record<string, string> }));
 });
 
 describe("createAuthHook", () => {
@@ -377,53 +404,61 @@ describe("createAuthHook", () => {
     });
   });
 
-  test("loader mirrors github-copilot models and injects the alias token into fetch", async () => {
-    fetchMock.mockImplementationOnce(() => Promise.resolve(createJsonResponse({ ok: true })));
+  test("loader mirrors github-copilot models when model_mirroring is auto", async () => {
+    readMirroringModeMock.mockImplementation(async (): Promise<"auto" | "skip"> => "auto");
 
-    const { input, providerListMock } = createInput(() =>
-      Promise.resolve({
-        data: {
-          all: [
-            {
-              id: "github-copilot",
-              name: "GitHub Copilot",
-              env: [],
-              models: {
-                "github-copilot/claude-sonnet-4": {
-                  id: "github-copilot/claude-sonnet-4",
-                  name: "Claude Sonnet 4",
-                  release_date: "2026-01-01",
-                  attachment: false,
-                  reasoning: true,
-                  temperature: true,
-                  tool_call: true,
-                  limit: {
-                    context: 200000,
-                    output: 32000,
-                  },
-                  options: {},
-                },
+    const providerListResponse = createJsonResponse({
+      all: [
+        {
+          id: "github-copilot",
+          name: "GitHub Copilot",
+          env: [],
+          models: {
+            "github-copilot/claude-sonnet-4": {
+              id: "github-copilot/claude-sonnet-4",
+              name: "Claude Sonnet 4",
+              release_date: "2026-01-01",
+              attachment: false,
+              reasoning: true,
+              temperature: true,
+              tool_call: true,
+              limit: {
+                context: 200000,
+                output: 32000,
               },
+              options: {},
             },
-          ],
+          },
         },
-      })
-    );
+      ],
+    });
+
+    fetchMock
+      .mockImplementationOnce(() => Promise.resolve(providerListResponse))
+      .mockImplementationOnce(() => Promise.resolve(createJsonResponse({ ok: true })));
+
+    const { input } = createInput();
     const hook = createAuthHook(input);
     const provider = createProvider();
 
     const loaded = await hook.loader?.(createAuthInfo(), provider);
 
-    expect(providerListMock).toHaveBeenCalledTimes(1);
-    expect(provider.models["multi-copilot/claude-sonnet-4"]).toMatchObject({
-      id: "multi-copilot/claude-sonnet-4",
-      name: "Claude Sonnet 4",
-    });
     expect(loaded).toMatchObject({
-      baseURL: "https://api.github.com",
+      baseURL: "https://api.githubcopilot.com",
       apiKey: "copilot",
     });
     expect(typeof loaded?.fetch).toBe("function");
+
+    expect(provider.models["claude-sonnet-4"]).toMatchObject({
+      id: "claude-sonnet-4",
+      name: "Claude Sonnet 4",
+    });
+
+    const providerCall = fetchMock.mock.calls[0] as unknown[] | undefined;
+    if (!providerCall) {
+      throw new Error("Expected /provider fetch call");
+    }
+    expect(String(providerCall[0])).toBe("http://localhost:3000/provider");
 
     await loaded?.fetch?.("https://api.github.com/chat/completions", {
       method: "POST",
@@ -438,7 +473,7 @@ describe("createAuthHook", () => {
     expect(resolveAccountForModelMock).toHaveBeenCalledWith("claude-sonnet-4");
     expect(getTokenForAliasMock).toHaveBeenCalledWith("work");
 
-    const fetchCall = fetchMock.mock.calls[0] as unknown[] | undefined;
+    const fetchCall = fetchMock.mock.calls[1] as unknown[] | undefined;
     if (!fetchCall) {
       throw new Error("Expected wrapped fetch call");
     }
@@ -448,6 +483,55 @@ describe("createAuthHook", () => {
 
     expect(headers.Authorization).toBe("Bearer ghu_test");
     expect(headers["x-api-key"]).toBeUndefined();
+  });
+
+  test("loader skips model mirroring when model_mirroring is skip with no mappings", async () => {
+    readMirroringModeMock.mockImplementation(async (): Promise<"auto" | "skip"> => "skip");
+    readMappingConfigMock.mockImplementation(async () => ({
+      default_account: "",
+      model_mirroring: "skip" as const,
+      mappings: {} as Record<string, string>,
+    }));
+
+    const { input } = createInput();
+    const hook = createAuthHook(input);
+    const provider = createProvider();
+
+    const loaded = await hook.loader?.(createAuthInfo(), provider);
+
+    expect(loaded).toMatchObject({
+      baseURL: "https://api.githubcopilot.com",
+      apiKey: "copilot",
+    });
+    expect(Object.keys(provider.models)).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("loader does not mutate provider models when model_mirroring is skip", async () => {
+    readMirroringModeMock.mockImplementation(async (): Promise<"auto" | "skip"> => "skip");
+    readMappingConfigMock.mockImplementation(async () => ({
+      default_account: "work",
+      model_mirroring: "skip" as const,
+      mappings: {
+        "github-copilot/claude-sonnet-4": "work",
+        "github-copilot/gpt-4o": "personal",
+      } as Record<string, string>,
+    }));
+
+    const { input } = createInput();
+    const hook = createAuthHook(input);
+    const provider = createProvider();
+
+    const loaded = await hook.loader?.(createAuthInfo(), provider);
+
+    expect(loaded).toMatchObject({
+      baseURL: "https://api.githubcopilot.com",
+      apiKey: "copilot",
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    expect(Object.keys(provider.models)).toHaveLength(0);
   });
 
   test("loader returns an enterprise base url when enterprise auth is active", async () => {
