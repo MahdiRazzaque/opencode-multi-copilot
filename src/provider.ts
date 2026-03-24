@@ -25,7 +25,8 @@ function isRequestBody(value: unknown): value is RequestBody {
 }
 
 export function normaliseDomain(url: string): string {
-  return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const parsed = url.includes("://") ? new URL(url) : new URL(`https://${url}`);
+  return parsed.host;
 }
 
 export function constructBaseURL(account: Pick<AccountData, "enterpriseUrl">): string {

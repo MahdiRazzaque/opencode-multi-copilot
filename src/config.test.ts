@@ -32,7 +32,33 @@ const {
   ensureMappingConfig,
   ensureAuthLedger,
   ensureConfigDir,
+  setDefaultAccountIfEmpty,
+  writeCachedModelIds,
 } = await import("./config.js");
+
+function createDeferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+} {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+
+  return { promise, resolve };
+}
+
+async function waitForCallCount(fn: { mock: { calls: unknown[][] } }, expectedCount: number): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (fn.mock.calls.length === expectedCount) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  throw new Error(`Timed out waiting for ${expectedCount} calls`);
+}
 
 describe("Config paths and auto-generation", () => {
   beforeEach(() => {
@@ -201,6 +227,22 @@ describe("Config paths and auto-generation", () => {
       const [from, to] = renameCall as [string, string];
       expect(from).toContain(".tmp");
       expect(to).toBe(AUTH_PATH);
+    });
+
+    test("uses a unique temp path for each auth ledger write", async () => {
+      mockAccess.mockImplementation(() => Promise.reject(new Error("ENOENT")));
+
+      await ensureAuthLedger();
+      mockAccess.mockImplementation(() => Promise.reject(new Error("ENOENT")));
+      await ensureAuthLedger();
+
+      const firstWriteCall = mockWriteFile.mock.calls[0] as unknown as [string, string] | undefined;
+      const secondWriteCall = mockWriteFile.mock.calls[1] as unknown as [string, string] | undefined;
+      if (!firstWriteCall || !secondWriteCall) {
+        throw new Error("Expected two writeFile calls");
+      }
+
+      expect(firstWriteCall[0]).not.toBe(secondWriteCall[0]);
     });
   });
 });
@@ -438,5 +480,81 @@ describe("readCachedModelIds", () => {
       event: "cached-model-ids-invalid",
       fallback: "Ignoring cached model IDs and continuing without mirrored-model cache.",
     });
+  });
+});
+
+describe("mapping writes", () => {
+  beforeEach(async () => {
+    const { clearMappingCache } = await import("./config.js");
+
+    mockStat.mockReset();
+    mockReadFile.mockReset();
+    mockWriteFile.mockReset();
+    mockRename.mockReset();
+    clearMappingCache();
+
+    mockStat.mockImplementation(() => Promise.resolve({ mtimeMs: 13000 }));
+    mockReadFile.mockImplementation(() =>
+      Promise.resolve(JSON.stringify({ default_account: "", model_mirroring: "skip", mappings: {} }))
+    );
+    mockWriteFile.mockImplementation(() => Promise.resolve());
+    mockRename.mockImplementation(() => Promise.resolve());
+  });
+
+  test("serialises concurrent default-account initialisation for the mapping file", async () => {
+    const firstWrite = createDeferred();
+    let currentMtime = 13000;
+    let currentContent = JSON.stringify({ default_account: "", model_mirroring: "skip", mappings: {} });
+    const tempContents = new Map<string, string>();
+
+    mockStat.mockImplementation(() => Promise.resolve({ mtimeMs: currentMtime }));
+    mockReadFile.mockImplementation(() => Promise.resolve(currentContent));
+    mockWriteFile.mockImplementationOnce(async (...args: unknown[]) => {
+      const [tempPath, content] = args as [string, string];
+      tempContents.set(tempPath, content);
+      await firstWrite.promise;
+    });
+    mockWriteFile.mockImplementation(async (...args: unknown[]) => {
+      const [tempPath, content] = args as [string, string];
+      tempContents.set(tempPath, content);
+    });
+    mockRename.mockImplementation(async (...args: unknown[]) => {
+      const [from] = args as [string, string];
+      const nextContent = tempContents.get(from);
+      if (!nextContent) {
+        throw new Error("Expected temp file content before rename");
+      }
+
+      currentContent = nextContent;
+      currentMtime += 1;
+    });
+
+    const first = setDefaultAccountIfEmpty("work");
+    await waitForCallCount(mockWriteFile, 1);
+
+    const second = setDefaultAccountIfEmpty("personal");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockWriteFile.mock.calls.length).toBe(1);
+
+    firstWrite.resolve();
+    await Promise.all([first, second]);
+
+    expect(JSON.parse(currentContent)).toMatchObject({
+      default_account: "work",
+    });
+    expect(mockWriteFile.mock.calls.length).toBe(1);
+  });
+
+  test("uses unique temp paths for repeated model cache writes", async () => {
+    await writeCachedModelIds(["claude-opus-4.6"]);
+    await writeCachedModelIds(["gpt-5"]);
+
+    const firstWriteCall = mockWriteFile.mock.calls[0] as unknown as [string, string] | undefined;
+    const secondWriteCall = mockWriteFile.mock.calls[1] as unknown as [string, string] | undefined;
+    if (!firstWriteCall || !secondWriteCall) {
+      throw new Error("Expected two writeFile calls");
+    }
+
+    expect(firstWriteCall[0]).not.toBe(secondWriteCall[0]);
   });
 });

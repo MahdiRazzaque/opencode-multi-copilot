@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type { AuthHook, AuthOuathResult, PluginInput } from "@opencode-ai/plugin";
+import { z } from "zod";
 
 import { AliasSchema } from "./schemas.js";
 import { normaliseDomain, constructBaseURL, detectVision, detectAgent } from "./provider.js";
@@ -29,6 +30,78 @@ type LedgerModule = {
     account: AccountRecord;
   }>;
 };
+
+const DeviceCodeResponseSchema = z.object({
+  device_code: z.string().min(1),
+  user_code: z.string().min(1),
+  verification_uri: z.url(),
+  interval: z.number().positive(),
+});
+
+const AccessTokenResponseSchema = z.object({
+  access_token: z.string().min(1).optional(),
+  error: z.string().min(1).optional(),
+  error_description: z.string().min(1).optional(),
+  message: z.string().min(1).optional(),
+  interval: z.number().positive().optional(),
+});
+
+type DeviceCodeResponse = z.infer<typeof DeviceCodeResponseSchema>;
+type AccessTokenResponse = z.infer<typeof AccessTokenResponseSchema>;
+
+function formatOAuthFailure(error: string, description?: string): string {
+  return description ? `${error}: ${description}` : error;
+}
+
+function reportOAuthFailure(reason: string): { type: "failed" } {
+  console.warn(`Multi Copilot OAuth failure: ${reason}`);
+  return { type: "failed" };
+}
+
+async function parseJsonBody(response: Response, context: string): Promise<unknown> {
+  const raw = await response.text();
+
+  try {
+    return JSON.parse(raw);
+  } catch (_e) {
+    throw new Error(`${context} returned invalid JSON`);
+  }
+}
+
+async function parseDeviceCodeResponse(response: Response): Promise<DeviceCodeResponse> {
+  const parsed = await parseJsonBody(response, "Device authorisation");
+  const result = DeviceCodeResponseSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error("Device authorisation returned an unexpected payload");
+  }
+
+  return result.data;
+}
+
+async function parseAccessTokenResponse(response: Response): Promise<AccessTokenResponse> {
+  const parsed = await parseJsonBody(response, "OAuth polling");
+  const result = AccessTokenResponseSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error("OAuth polling returned an unexpected payload");
+  }
+
+  return result.data;
+}
+
+async function getFailedOAuthReason(response: Response, context: string): Promise<string> {
+  try {
+    const data = await parseAccessTokenResponse(response);
+    if (data.error) {
+      return formatOAuthFailure(data.error, data.error_description ?? data.message);
+    }
+
+    if (data.message) {
+      return data.message;
+    }
+  } catch (_e) {}
+
+  return `${context} failed with HTTP ${response.status}`;
+}
 
 function getOauthUrls(inputs: Record<string, string>): {
   deviceCodeUrl: string;
@@ -95,16 +168,91 @@ function extractModelId(body: unknown): string | undefined {
   }
 }
 
+function getRequestUrl(request: Request | URL | string): string {
+  if (request instanceof Request) {
+    return request.url;
+  }
+
+  return request instanceof URL ? request.href : request;
+}
+
+function normaliseHeaders(headers?: HeadersInit): Record<string, string> {
+  if (!headers) {
+    return {};
+  }
+
+  if (headers instanceof Headers) {
+    const values: Record<string, string> = {};
+    headers.forEach((value, key) => {
+      values[key] = value;
+    });
+    return values;
+  }
+
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers.map(([key, value]) => [key, String(value)]));
+  }
+
+  return Object.fromEntries(Object.entries(headers).map(([key, value]) => [key, String(value)]));
+}
+
+async function readRequestBody(request: Request | URL | string, init?: RequestInit): Promise<unknown> {
+  if (typeof init?.body === "string") {
+    try {
+      return JSON.parse(init.body);
+    } catch (_e) {
+      return init.body;
+    }
+  }
+
+  if (init?.body !== undefined) {
+    return init.body;
+  }
+
+  if (!(request instanceof Request)) {
+    return undefined;
+  }
+
+  try {
+    const text = await request.clone().text();
+    if (!text) {
+      return undefined;
+    }
+
+    return JSON.parse(text);
+  } catch (_e) {
+    return undefined;
+  }
+}
+
+async function buildForwardedInit(request: Request | URL | string, init: RequestInit | undefined): Promise<RequestInit> {
+  if (!(request instanceof Request)) {
+    return { ...init };
+  }
+
+  const baseInit: RequestInit = {
+    method: request.method,
+  };
+
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    const bodyText = await request.clone().text();
+    if (bodyText) {
+      baseInit.body = bodyText;
+    }
+  }
+
+  return {
+    ...baseInit,
+    ...init,
+  };
+}
+
 function rewriteRequestTarget(
   request: Request | URL | string,
   account: AccountRecord
 ): Request | URL | string {
-  if (!account.enterpriseUrl) {
-    return request;
-  }
-
   const baseUrl = constructBaseURL(account);
-  const target = request instanceof URL ? request.href : request.toString();
+  const target = getRequestUrl(request);
 
   try {
     const url = new URL(target);
@@ -214,7 +362,8 @@ export function createAuthHook(input: PluginInput): AuthHook {
       }
 
       const fetchFn = async function multiCopilotFetch(request: Request | URL | string, init?: RequestInit) {
-        const modelId = extractModelId(init?.body);
+        const body = await readRequestBody(request, init);
+        const modelId = extractModelId(typeof body === "string" ? body : JSON.stringify(body));
 
         let account: AccountRecord = {
           access_token: info.access,
@@ -229,18 +378,19 @@ export function createAuthHook(input: PluginInput): AuthHook {
           account = await ledger.getTokenForAlias(resolved.alias);
         }
 
-        const url = request instanceof URL ? request.href : request.toString();
-        let body: unknown;
-        try {
-          body = typeof init?.body === "string" ? JSON.parse(init.body) : init?.body;
-        } catch (_e) {}
+        const url = getRequestUrl(request);
 
         const isVision = detectVision(body, url);
         const isAgent = detectAgent(body, url);
 
+        const mergedHeaders = {
+          ...(request instanceof Request ? normaliseHeaders(request.headers) : {}),
+          ...normaliseHeaders(init?.headers),
+        };
+
         const headers: Record<string, string> = {
           "x-initiator": isAgent ? "agent" : "user",
-          ...(init?.headers as Record<string, string> | undefined),
+          ...mergedHeaders,
           "User-Agent": USER_AGENT,
           Authorization: `Bearer ${account.refresh_token || account.access_token}`,
           "Openai-Intent": "conversation-edits",
@@ -252,9 +402,11 @@ export function createAuthHook(input: PluginInput): AuthHook {
 
         delete headers.authorization;
         delete headers["x-api-key"];
+        delete headers.Authorization;
+        headers.Authorization = `Bearer ${account.refresh_token || account.access_token}`;
 
         return fetch(rewriteRequestTarget(request, account), {
-          ...init,
+          ...(await buildForwardedInit(request, init)),
           headers,
         });
       };
@@ -303,7 +455,7 @@ export function createAuthHook(input: PluginInput): AuthHook {
             validate: validateEnterpriseUrl,
           },
         ],
-        async authorize(inputs = {}): Promise<AuthOuathResult> {
+        async authorize(inputs: Record<string, string> = {}): Promise<AuthOuathResult> {
           const urls = getOauthUrls(inputs);
 
           const deviceResponse = await fetch(urls.deviceCodeUrl, {
@@ -323,12 +475,7 @@ export function createAuthHook(input: PluginInput): AuthHook {
             throw new Error("Failed to initiate device authorisation");
           }
 
-          const deviceData = (await deviceResponse.json()) as {
-            device_code: string;
-            user_code: string;
-            verification_uri: string;
-            interval: number;
-          };
+          const deviceData = await parseDeviceCodeResponse(deviceResponse);
 
           return {
             url: deviceData.verification_uri,
@@ -351,14 +498,19 @@ export function createAuthHook(input: PluginInput): AuthHook {
                 });
 
                 if (!response.ok) {
-                  return { type: "failed" };
+                  return reportOAuthFailure(
+                    await getFailedOAuthReason(response, "OAuth polling")
+                  );
                 }
 
-                const data = (await response.json()) as {
-                  access_token?: string;
-                  error?: string;
-                  interval?: number;
-                };
+                let data: AccessTokenResponse;
+                try {
+                  data = await parseAccessTokenResponse(response);
+                } catch (error) {
+                  return reportOAuthFailure(
+                    error instanceof Error ? error.message : "OAuth polling returned an unexpected payload"
+                  );
+                }
 
                 if (data.access_token) {
                   const alias = inputs.alias ?? "";
@@ -396,10 +548,12 @@ export function createAuthHook(input: PluginInput): AuthHook {
                 }
 
                 if (data.error) {
-                  return { type: "failed" };
+                  return reportOAuthFailure(
+                    formatOAuthFailure(data.error, data.error_description ?? data.message)
+                  );
                 }
 
-                await sleep(deviceData.interval * 1000 + OAUTH_POLLING_SAFETY_MARGIN_MS);
+                return reportOAuthFailure("OAuth polling returned an unexpected payload");
               }
             },
           };

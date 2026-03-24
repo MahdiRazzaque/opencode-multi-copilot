@@ -184,7 +184,7 @@ describe("ledger state manager", () => {
     expect(ledger.personal.refresh_token).toBe("personal-refresh-token");
   });
 
-  test("allows concurrent writes for different aliases", async () => {
+  test("serialises concurrent writes for different aliases at file level", async () => {
     const firstWrite = createDeferred();
     const secondWrite = createDeferred();
     let writeCount = 0;
@@ -197,15 +197,26 @@ describe("ledger state manager", () => {
     const workPromise = setAccount("work", workAccount);
     const personalPromise = setAccount("personal", personalAccount);
 
-    await waitForCallCount(mockWriteFile, 2);
+    await waitForCallCount(mockWriteFile, 1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockWriteFile.mock.calls.length).toBe(1);
 
     firstWrite.resolve();
+    await waitForCallCount(mockWriteFile, 2);
     secondWrite.resolve();
 
     await Promise.all([workPromise, personalPromise]);
 
     expect(await getAccount("work")).toEqual(workAccount);
     expect(await getAccount("personal")).toEqual(personalAccount);
+
+    const firstWriteCall = mockWriteFile.mock.calls[0] as unknown as [string, string, string] | undefined;
+    const secondWriteCall = mockWriteFile.mock.calls[1] as unknown as [string, string, string] | undefined;
+    if (!firstWriteCall || !secondWriteCall) {
+      throw new Error("Expected two writeFile calls");
+    }
+
+    expect(firstWriteCall[0]).not.toBe(secondWriteCall[0]);
   });
 
   test("serialises concurrent writes for the same alias", async () => {
