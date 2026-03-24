@@ -1,9 +1,6 @@
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import type { OpenAICompatibleProvider } from "@ai-sdk/openai-compatible";
-import { resolveAccountForModel } from "./ledger.js";
 import type { AccountData } from "./schemas.js";
 
-export const PERSONAL_BASE_URL = "https://api.github.com";
+export const PERSONAL_BASE_URL = "https://api.githubcopilot.com";
 
 type ContentPart = {
   type: string;
@@ -107,48 +104,3 @@ export function detectAgent(body: unknown, url?: string): boolean {
   return false;
 }
 
-export function createCustomFetch(modelId: string): (request: string | URL | Request, init?: RequestInit) => Promise<Response> {
-  return async (request: string | URL | Request, init?: RequestInit) => {
-    const { account } = await resolveAccountForModel(modelId);
-    const url = request instanceof URL ? request.href : request.toString();
-
-    let body: unknown;
-    try {
-      body = typeof init?.body === "string" ? JSON.parse(init.body) : init?.body;
-    } catch (_e) {}
-
-    const isVision = detectVision(body, url);
-    const isAgent = detectAgent(body, url);
-
-    const headers: Record<string, string> = {
-      "x-initiator": isAgent ? "agent" : "user",
-      ...(init?.headers as Record<string, string>),
-      "User-Agent": "opencode/multi-copilot",
-      Authorization: `Bearer ${account.access_token}`,
-      "Openai-Intent": "conversation-edits",
-    };
-
-    if (isVision) {
-      headers["Copilot-Vision-Request"] = "true";
-    }
-
-    delete headers["x-api-key"];
-    delete headers.authorization;
-
-    return fetch(request, { ...init, headers });
-  };
-}
-
-export function createMultiCopilotProvider(
-  modelId: string,
-  account: AccountData
-): OpenAICompatibleProvider {
-  const baseURL = constructBaseURL(account);
-  const customFetch = createCustomFetch(modelId);
-
-  return createOpenAICompatible({
-    name: "multi-copilot",
-    baseURL,
-    fetch: customFetch as typeof fetch,
-  });
-}

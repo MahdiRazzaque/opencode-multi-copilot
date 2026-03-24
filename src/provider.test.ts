@@ -1,19 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
-const mockResolveAccountForModel = mock(async (_modelId: string) => ({
-  alias: "work",
-  account: {
-    access_token: "test-token-abc",
-    refresh_token: "test-token-abc",
-    expires: 0,
-    enterpriseUrl: "",
-  },
-}));
-
-mock.module("./ledger.js", () => ({
-  resolveAccountForModel: mockResolveAccountForModel,
-}));
-
 const fetchMock = mock(async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
@@ -28,17 +14,14 @@ globalThis.fetch = fetchMock as unknown as typeof fetch;
 const {
   PERSONAL_BASE_URL,
   constructBaseURL,
-  createCustomFetch,
   detectAgent,
   detectVision,
   normaliseDomain,
-  createMultiCopilotProvider,
 } = await import("./provider.js");
 
 describe("provider helpers", () => {
   beforeEach(() => {
     fetchMock.mockClear();
-    mockResolveAccountForModel.mockClear();
   });
 
   test("detectVision returns true for completions image_url content", () => {
@@ -138,173 +121,6 @@ describe("provider helpers", () => {
     expect(detectAgent({})).toBe(false);
   });
 
-  test("createCustomFetch injects Authorization from the resolved account", async () => {
-    const customFetch = createCustomFetch("claude-sonnet-4");
-
-    await customFetch("https://api.github.com/chat/completions", {
-      method: "POST",
-      body: JSON.stringify({
-        messages: [{ role: "user", content: "hello" }],
-      }),
-    });
-
-    const call = fetchMock.mock.calls[0] as [string | URL | Request, RequestInit] | undefined;
-    if (!call) {
-      throw new Error("Expected wrapped fetch call");
-    }
-
-    const headers = call[1].headers as Record<string, string>;
-    expect(headers.Authorization).toBe("Bearer test-token-abc");
-  });
-
-  test("createCustomFetch injects x-initiator agent when the last role is not user", async () => {
-    const customFetch = createCustomFetch("claude-sonnet-4");
-
-    await customFetch("https://api.github.com/chat/completions", {
-      method: "POST",
-      body: JSON.stringify({
-        messages: [
-          { role: "user", content: "hello" },
-          { role: "assistant", content: "hi" },
-        ],
-      }),
-    });
-
-    const call = fetchMock.mock.calls[0] as [string | URL | Request, RequestInit] | undefined;
-    if (!call) {
-      throw new Error("Expected wrapped fetch call");
-    }
-
-    const headers = call[1].headers as Record<string, string>;
-    expect(headers["x-initiator"]).toBe("agent");
-  });
-
-  test("createCustomFetch injects x-initiator user when the last role is user", async () => {
-    const customFetch = createCustomFetch("claude-sonnet-4");
-
-    await customFetch("https://api.github.com/chat/completions", {
-      method: "POST",
-      body: JSON.stringify({
-        messages: [{ role: "user", content: "hello" }],
-      }),
-    });
-
-    const call = fetchMock.mock.calls[0] as [string | URL | Request, RequestInit] | undefined;
-    if (!call) {
-      throw new Error("Expected wrapped fetch call");
-    }
-
-    const headers = call[1].headers as Record<string, string>;
-    expect(headers["x-initiator"]).toBe("user");
-  });
-
-  test("createCustomFetch injects Copilot-Vision-Request for vision content", async () => {
-    const customFetch = createCustomFetch("claude-sonnet-4");
-
-    await customFetch("https://api.github.com/chat/completions", {
-      method: "POST",
-      body: JSON.stringify({
-        messages: [
-          {
-            role: "user",
-            content: [{ type: "image_url", image_url: { url: "https://example.com/cat.png" } }],
-          },
-        ],
-      }),
-    });
-
-    const call = fetchMock.mock.calls[0] as [string | URL | Request, RequestInit] | undefined;
-    if (!call) {
-      throw new Error("Expected wrapped fetch call");
-    }
-
-    const headers = call[1].headers as Record<string, string>;
-    expect(headers["Copilot-Vision-Request"]).toBe("true");
-  });
-
-  test("createCustomFetch injects Openai-Intent conversation-edits", async () => {
-    const customFetch = createCustomFetch("claude-sonnet-4");
-
-    await customFetch("https://api.github.com/chat/completions", {
-      method: "POST",
-      body: JSON.stringify({
-        messages: [{ role: "user", content: "hello" }],
-      }),
-    });
-
-    const call = fetchMock.mock.calls[0] as [string | URL | Request, RequestInit] | undefined;
-    if (!call) {
-      throw new Error("Expected wrapped fetch call");
-    }
-
-    const headers = call[1].headers as Record<string, string>;
-    expect(headers["Openai-Intent"]).toBe("conversation-edits");
-  });
-
-  test("createCustomFetch injects the opencode multi-copilot user agent", async () => {
-    const customFetch = createCustomFetch("claude-sonnet-4");
-
-    await customFetch("https://api.github.com/chat/completions", {
-      method: "POST",
-      body: JSON.stringify({
-        messages: [{ role: "user", content: "hello" }],
-      }),
-    });
-
-    const call = fetchMock.mock.calls[0] as [string | URL | Request, RequestInit] | undefined;
-    if (!call) {
-      throw new Error("Expected wrapped fetch call");
-    }
-
-    const headers = call[1].headers as Record<string, string>;
-    expect(headers["User-Agent"]).toBe("opencode/multi-copilot");
-  });
-
-  test("createCustomFetch deletes x-api-key from headers", async () => {
-    const customFetch = createCustomFetch("claude-sonnet-4");
-
-    await customFetch("https://api.github.com/chat/completions", {
-      method: "POST",
-      headers: {
-        "x-api-key": "remove-me",
-      },
-      body: JSON.stringify({
-        messages: [{ role: "user", content: "hello" }],
-      }),
-    });
-
-    const call = fetchMock.mock.calls[0] as [string | URL | Request, RequestInit] | undefined;
-    if (!call) {
-      throw new Error("Expected wrapped fetch call");
-    }
-
-    const headers = call[1].headers as Record<string, string>;
-    expect(headers["x-api-key"]).toBeUndefined();
-  });
-
-  test("createCustomFetch deletes lowercase authorization from headers", async () => {
-    const customFetch = createCustomFetch("claude-sonnet-4");
-
-    await customFetch("https://api.github.com/chat/completions", {
-      method: "POST",
-      headers: {
-        authorization: "Bearer stale-token",
-      },
-      body: JSON.stringify({
-        messages: [{ role: "user", content: "hello" }],
-      }),
-    });
-
-    const call = fetchMock.mock.calls[0] as [string | URL | Request, RequestInit] | undefined;
-    if (!call) {
-      throw new Error("Expected wrapped fetch call");
-    }
-
-    const headers = call[1].headers as Record<string, string>;
-    expect(headers.authorization).toBeUndefined();
-    expect(headers.Authorization).toBe("Bearer test-token-abc");
-  });
-
   test("constructBaseURL returns the personal base URL for personal accounts", () => {
     expect(constructBaseURL({ enterpriseUrl: "" })).toBe(PERSONAL_BASE_URL);
   });
@@ -341,52 +157,7 @@ describe("provider helpers", () => {
       enterpriseUrl: "",
     };
 
-    expect(constructBaseURL(personalAccount)).toBe("https://api.github.com");
+    expect(constructBaseURL(personalAccount)).toBe("https://api.githubcopilot.com");
     expect(constructBaseURL(enterpriseAccount)).toBe("https://copilot-api.github.mycompany.com");
-  });
-});
-
-describe("createMultiCopilotProvider", () => {
-  beforeEach(() => {
-    fetchMock.mockClear();
-  });
-
-  const mockAccount = {
-    access_token: "test-token",
-    refresh_token: "refresh-token",
-    expires: 0,
-    enterpriseUrl: "",
-  };
-
-  test("returns an object with .chatModel method", () => {
-    const provider = createMultiCopilotProvider("gpt-4", mockAccount);
-    expect(typeof provider.chatModel).toBe("function");
-  });
-
-  test("returns an object with .languageModel method", () => {
-    const provider = createMultiCopilotProvider("gpt-4", mockAccount);
-    expect(typeof provider.languageModel).toBe("function");
-  });
-
-  test("uses the correct baseURL from constructBaseURL", async () => {
-    const enterpriseAccount = {
-      ...mockAccount,
-      enterpriseUrl: "https://github.example.com",
-    };
-    const provider = createMultiCopilotProvider("gpt-4", enterpriseAccount);
-    const model = provider.chatModel("gpt-4");
-
-    try {
-      await model.doGenerate({
-        prompt: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
-      } as any);
-    } catch (e) {
-    }
-
-    expect(fetchMock).toHaveBeenCalled();
-    const call = fetchMock.mock.calls[0] as [string | URL | Request, RequestInit] | undefined;
-    const url = call?.[0] instanceof Request ? call[0].url : call?.[0].toString();
-    expect(typeof url).toBe("string");
-    expect(url).toContain("https://copilot-api.github.example.com");
   });
 });
