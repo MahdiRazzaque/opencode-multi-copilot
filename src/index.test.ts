@@ -7,6 +7,7 @@ const mockReadMappingConfig = mock(async () => ({
   model_mirroring: "skip",
   mappings: {},
 }));
+const consoleWarnMock = mock((_message?: unknown, _payload?: unknown) => {});
 const mockCreateAuthHook = mock((input: any) => ({
   provider: "multi-copilot",
   loader: async (_auth: any, provider: any) => {
@@ -111,6 +112,9 @@ function createProvider() {
 }
 
 beforeEach(() => {
+  console.warn = consoleWarnMock as typeof console.warn;
+  consoleWarnMock.mockReset();
+  consoleWarnMock.mockImplementation((_message?: unknown, _payload?: unknown) => {});
   mockEnsureMappingConfig.mockReset();
   mockEnsureMappingConfig.mockImplementation(async () => {});
   mockEnsureAuthLedger.mockReset();
@@ -227,6 +231,34 @@ describe("MultiCopilotPlugin", () => {
         cost: { input: 0, output: 0 },
         limit: { context: 128000, output: 16384 },
       },
+    });
+  });
+
+  test("config hook warns when mapping config cannot be read and continues with empty models", async () => {
+    mockReadMappingConfig.mockImplementation(async () => {
+      throw new Error("mapping file unreadable");
+    });
+
+    const { input } = createInput();
+    const hooks = await MultiCopilotPlugin(input);
+    const config = createConfig({});
+
+    if (!hooks.config) {
+      throw new Error("Expected config hook to be defined");
+    }
+
+    await hooks.config(config);
+
+    expect(config.provider["multi-copilot"]).toEqual({
+      name: "Multi Copilot",
+      env: [],
+      models: {},
+    });
+    expect(consoleWarnMock).toHaveBeenCalledWith("[multi-copilot]", {
+      level: "warn",
+      event: "mapping-config-unavailable",
+      fallback: "Continuing with no predeclared config-hook models.",
+      error: "mapping file unreadable",
     });
   });
 

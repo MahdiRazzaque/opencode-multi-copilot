@@ -1,9 +1,11 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type { AuthHook, AuthOuathResult, PluginInput } from "@opencode-ai/plugin";
+import { z } from "zod";
 
 import { AliasSchema } from "./schemas.js";
 import { normaliseDomain, constructBaseURL, detectVision, detectAgent } from "./provider.js";
+import { warnFallback } from "./diagnostics.js";
 import { setAccount } from "./ledger.js";
 import { readMirroringMode, setDefaultAccountIfEmpty, writeCachedModelIds } from "./config.js";
 
@@ -28,6 +30,78 @@ type LedgerModule = {
     account: AccountRecord;
   }>;
 };
+
+const DeviceCodeResponseSchema = z.object({
+  device_code: z.string().min(1),
+  user_code: z.string().min(1),
+  verification_uri: z.url(),
+  interval: z.number().positive(),
+});
+
+const AccessTokenResponseSchema = z.object({
+  access_token: z.string().min(1).optional(),
+  error: z.string().min(1).optional(),
+  error_description: z.string().min(1).optional(),
+  message: z.string().min(1).optional(),
+  interval: z.number().positive().optional(),
+});
+
+type DeviceCodeResponse = z.infer<typeof DeviceCodeResponseSchema>;
+type AccessTokenResponse = z.infer<typeof AccessTokenResponseSchema>;
+
+function formatOAuthFailure(error: string, description?: string): string {
+  return description ? `${error}: ${description}` : error;
+}
+
+function reportOAuthFailure(reason: string): { type: "failed" } {
+  console.warn(`Multi Copilot OAuth failure: ${reason}`);
+  return { type: "failed" };
+}
+
+async function parseJsonBody(response: Response, context: string): Promise<unknown> {
+  const raw = await response.text();
+
+  try {
+    return JSON.parse(raw);
+  } catch (_e) {
+    throw new Error(`${context} returned invalid JSON`);
+  }
+}
+
+async function parseDeviceCodeResponse(response: Response): Promise<DeviceCodeResponse> {
+  const parsed = await parseJsonBody(response, "Device authorisation");
+  const result = DeviceCodeResponseSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error("Device authorisation returned an unexpected payload");
+  }
+
+  return result.data;
+}
+
+async function parseAccessTokenResponse(response: Response): Promise<AccessTokenResponse> {
+  const parsed = await parseJsonBody(response, "OAuth polling");
+  const result = AccessTokenResponseSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error("OAuth polling returned an unexpected payload");
+  }
+
+  return result.data;
+}
+
+async function getFailedOAuthReason(response: Response, context: string): Promise<string> {
+  try {
+    const data = await parseAccessTokenResponse(response);
+    if (data.error) {
+      return formatOAuthFailure(data.error, data.error_description ?? data.message);
+    }
+
+    if (data.message) {
+      return data.message;
+    }
+  } catch (_e) {}
+
+  return `${context} failed with HTTP ${response.status}`;
+}
 
 function getOauthUrls(inputs: Record<string, string>): {
   deviceCodeUrl: string;
@@ -201,6 +275,11 @@ async function fetchGithubCopilotModels(
   });
 
   if (!response.ok) {
+    warnFallback(
+      "github-copilot-provider-fetch-failed",
+      "Skipping model mirroring for this loader call.",
+      `HTTP ${response.status}`
+    );
     return undefined;
   }
 
@@ -255,7 +334,13 @@ async function mirrorGithubCopilotModels(
         },
       };
     }
-    await writeCachedModelIds(bareIds).catch(() => {});
+    await writeCachedModelIds(bareIds).catch((error) => {
+      warnFallback(
+        "mirrored-model-cache-write-failed",
+        "Continuing with mirrored models in memory only.",
+        error
+      );
+    });
   }
 }
 
@@ -263,7 +348,13 @@ export function createAuthHook(input: PluginInput): AuthHook {
   return {
     provider: "multi-copilot",
     async loader(auth, provider) {
-      await mirrorGithubCopilotModels(input, provider).catch(() => {});
+      await mirrorGithubCopilotModels(input, provider).catch((error) => {
+        warnFallback(
+          "model-mirroring-failed",
+          "Continuing without mirrored github-copilot models.",
+          error
+        );
+      });
 
       const info = await auth();
       if (!info || info.type !== "oauth") {
@@ -364,7 +455,7 @@ export function createAuthHook(input: PluginInput): AuthHook {
             validate: validateEnterpriseUrl,
           },
         ],
-        async authorize(inputs = {}): Promise<AuthOuathResult> {
+        async authorize(inputs: Record<string, string> = {}): Promise<AuthOuathResult> {
           const urls = getOauthUrls(inputs);
 
           const deviceResponse = await fetch(urls.deviceCodeUrl, {
@@ -384,12 +475,7 @@ export function createAuthHook(input: PluginInput): AuthHook {
             throw new Error("Failed to initiate device authorisation");
           }
 
-          const deviceData = (await deviceResponse.json()) as {
-            device_code: string;
-            user_code: string;
-            verification_uri: string;
-            interval: number;
-          };
+          const deviceData = await parseDeviceCodeResponse(deviceResponse);
 
           return {
             url: deviceData.verification_uri,
@@ -412,14 +498,19 @@ export function createAuthHook(input: PluginInput): AuthHook {
                 });
 
                 if (!response.ok) {
-                  return { type: "failed" };
+                  return reportOAuthFailure(
+                    await getFailedOAuthReason(response, "OAuth polling")
+                  );
                 }
 
-                const data = (await response.json()) as {
-                  access_token?: string;
-                  error?: string;
-                  interval?: number;
-                };
+                let data: AccessTokenResponse;
+                try {
+                  data = await parseAccessTokenResponse(response);
+                } catch (error) {
+                  return reportOAuthFailure(
+                    error instanceof Error ? error.message : "OAuth polling returned an unexpected payload"
+                  );
+                }
 
                 if (data.access_token) {
                   const alias = inputs.alias ?? "";
@@ -457,10 +548,12 @@ export function createAuthHook(input: PluginInput): AuthHook {
                 }
 
                 if (data.error) {
-                  return { type: "failed" };
+                  return reportOAuthFailure(
+                    formatOAuthFailure(data.error, data.error_description ?? data.message)
+                  );
                 }
 
-                await sleep(deviceData.interval * 1000 + OAUTH_POLLING_SAFETY_MARGIN_MS);
+                return reportOAuthFailure("OAuth polling returned an unexpected payload");
               }
             },
           };

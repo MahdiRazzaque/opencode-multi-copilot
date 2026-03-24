@@ -3,6 +3,7 @@ import type { Config } from "@opencode-ai/sdk";
 
 import { createAuthHook } from "./auth.js";
 import { ensureAuthLedger, ensureMappingConfig, readMappingConfig } from "./config.js";
+import { warnFallback } from "./diagnostics.js";
 
 function buildConfigModel(bareId: string) {
   return {
@@ -24,7 +25,14 @@ export default async function MultiCopilotPlugin(input: PluginInput): Promise<Ho
       config.provider = config.provider ?? {};
 
       const models: Record<string, ReturnType<typeof buildConfigModel>> = {};
-      const mapping = await readMappingConfig().catch(() => null);
+      const mapping = await readMappingConfig().catch((error) => {
+        warnFallback(
+          "mapping-config-unavailable",
+          "Continuing with no predeclared config-hook models.",
+          error
+        );
+        return null;
+      });
       if (mapping) {
         for (const key of Object.keys(mapping.mappings)) {
           const bareId = key.replace(/^github-copilot\//, "");
