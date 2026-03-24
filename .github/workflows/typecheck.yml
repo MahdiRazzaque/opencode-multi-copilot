@@ -1,0 +1,16 @@
+name: Typecheck
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  typecheck:
+    uses: ./.github/workflows/bun-command.yml
+    with:
+      job_name: Typecheck
+      run_command: bun run typecheck

@@ -1,0 +1,16 @@
+name: Build
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    uses: ./.github/workflows/bun-command.yml
+    with:
+      job_name: Build
+      run_command: bun run build
