@@ -141,7 +141,7 @@ For enterprise accounts, the plugin uses:
 
 ```bash
 bun install
-bun test
+bun run test
 bun run typecheck
 bun run build
 ```

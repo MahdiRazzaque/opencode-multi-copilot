@@ -11,7 +11,7 @@ bun install
 Run the test suite:
 
 ```bash
-bun test
+bun run test
 ```
 
 Run type-checking:
@@ -63,7 +63,7 @@ Build-oriented settings are defined in `tsconfig.build.json`, including declarat
 
 1. Install dependencies with `bun install`.
 2. Make the required code changes.
-3. Run `bun test`.
+3. Run `bun run test`.
 4. Run `bun run typecheck`.
 5. Run `bun run build`.
 6. Rebuild or relink the plugin before testing it inside OpenCode.
