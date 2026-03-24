@@ -36,10 +36,26 @@ const mockCreateAuthHook = mock((input: any) => ({
 mock.module("./config.js", () => ({
   ensureMappingConfig: mockEnsureMappingConfig,
   ensureAuthLedger: mockEnsureAuthLedger,
+  CONFIG_DIR: "/tmp/mock-config",
+  MAPPING_PATH: "/tmp/mock-config/multi-copilot-mapping.json",
+  AUTH_PATH: "/tmp/mock-config/multi-copilot-auth.json",
+  clearMappingCache: mock(() => {}),
+  ensureConfigDir: mock(async () => {}),
+  readMappingConfig: mock(async () => ({ default_account: "", model_mirroring: "skip", mappings: {} })),
+  resolveAliasForModel: mock(
+    (_modelId: string, _aliases: string[], _mapping: any) => undefined
+  ),
+  setDefaultAccountIfEmpty: mock(async () => {}),
+  readMirroringMode: mock(async () => "skip"),
+  writeCachedModelIds: mock(async () => {}),
+  readCachedModelIds: mock(async () => []),
 }));
 
 mock.module("./auth.js", () => ({
   createAuthHook: mockCreateAuthHook,
+  GITHUB_DEVICE_CODE_URL: "https://github.com/login/device/code",
+  GITHUB_ACCESS_TOKEN_URL: "https://github.com/login/oauth/access_token",
+  COPILOT_CLIENT_ID: "Ov23li8tweQw6odWQebz",
 }));
 
 const { default: MultiCopilotPlugin } = await import("./index.js");
@@ -155,6 +171,7 @@ describe("MultiCopilotPlugin", () => {
     expect(config.provider["multi-copilot"]).toEqual({
       name: "Multi Copilot",
       env: [],
+      models: {},
     });
   });
 
@@ -173,6 +190,7 @@ describe("MultiCopilotPlugin", () => {
       "multi-copilot": {
         name: "Multi Copilot",
         env: [],
+        models: {},
       },
     });
   });
