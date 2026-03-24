@@ -2,6 +2,8 @@ import * as fs from "node:fs/promises";
 import { homedir } from "node:os";
 import * as path from "node:path";
 
+import { warnFallback } from "./diagnostics.js";
+
 import { EMPTY_MAPPING_CONFIG, MappingConfigSchema } from "./schemas.js";
 import type { MappingConfig, ModelMirroring } from "./schemas.js";
 
@@ -133,7 +135,12 @@ export async function readMirroringMode(): Promise<ModelMirroring> {
   try {
     const mapping = await readMappingConfig();
     return mapping.model_mirroring ?? "skip";
-  } catch {
+  } catch (error) {
+    warnFallback(
+      "mirroring-mode-read-failed",
+      "Falling back to model_mirroring='skip'.",
+      error
+    );
     return "skip";
   }
 }
@@ -145,8 +152,22 @@ export async function readCachedModelIds(): Promise<string[]> {
     if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
       return parsed as string[];
     }
+
+    warnFallback(
+      "cached-model-ids-invalid",
+      "Ignoring cached model IDs and continuing without mirrored-model cache."
+    );
     return [];
-  } catch {
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return [];
+    }
+
+    warnFallback(
+      "cached-model-ids-read-failed",
+      "Continuing without mirrored-model cache.",
+      error
+    );
     return [];
   }
 }

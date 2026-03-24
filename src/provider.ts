@@ -71,7 +71,7 @@ export function detectVision(body: unknown, url?: string): boolean {
           )
       );
     }
-  } catch (_e) {}
+  } catch (_error) {}
 
   return false;
 }
@@ -99,8 +99,7 @@ export function detectAgent(body: unknown, url?: string): boolean {
         (last.content as ContentPart[]).some((part) => part.type !== "tool_result");
       return !(last?.role === "user" && hasNonToolCalls);
     }
-  } catch (_e) {}
+  } catch (_error) {}
 
   return false;
 }
-

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-
 const fetchMock = mock(async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
@@ -119,6 +118,26 @@ describe("provider helpers", () => {
   test("detectAgent returns false for empty body", () => {
     expect(detectAgent(null)).toBe(false);
     expect(detectAgent({})).toBe(false);
+  });
+
+  test("detectVision returns false when request inspection throws", () => {
+    const body = {
+      get messages() {
+        throw new Error("bad vision body");
+      },
+    };
+
+    expect(detectVision(body, "https://api.github.com/chat/completions")).toBe(false);
+  });
+
+  test("detectAgent returns false when request inspection throws", () => {
+    const body = {
+      get messages() {
+        throw new Error("bad agent body");
+      },
+    };
+
+    expect(detectAgent(body, "https://api.github.com/chat/completions")).toBe(false);
   });
 
   test("constructBaseURL returns the personal base URL for personal accounts", () => {
