@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { AliasSchema } from "./schemas.js";
 import { normaliseDomain, constructBaseURL, detectVision, detectAgent } from "./provider.js";
+import { warnFallback } from "./diagnostics.js";
 import { setAccount } from "./ledger.js";
 import { readMirroringMode, setDefaultAccountIfEmpty, writeCachedModelIds } from "./config.js";
 
@@ -274,6 +275,11 @@ async function fetchGithubCopilotModels(
   });
 
   if (!response.ok) {
+    warnFallback(
+      "github-copilot-provider-fetch-failed",
+      "Skipping model mirroring for this loader call.",
+      `HTTP ${response.status}`
+    );
     return undefined;
   }
 
@@ -328,7 +334,13 @@ async function mirrorGithubCopilotModels(
         },
       };
     }
-    await writeCachedModelIds(bareIds).catch(() => {});
+    await writeCachedModelIds(bareIds).catch((error) => {
+      warnFallback(
+        "mirrored-model-cache-write-failed",
+        "Continuing with mirrored models in memory only.",
+        error
+      );
+    });
   }
 }
 
@@ -336,7 +348,13 @@ export function createAuthHook(input: PluginInput): AuthHook {
   return {
     provider: "multi-copilot",
     async loader(auth, provider) {
-      await mirrorGithubCopilotModels(input, provider).catch(() => {});
+      await mirrorGithubCopilotModels(input, provider).catch((error) => {
+        warnFallback(
+          "model-mirroring-failed",
+          "Continuing without mirrored github-copilot models.",
+          error
+        );
+      });
 
       const info = await auth();
       if (!info || info.type !== "oauth") {

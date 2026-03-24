@@ -21,6 +21,7 @@ const setAccountMock = mock(async () => {});
 const setDefaultAccountIfEmptyMock = mock(async () => {});
 const readMirroringModeMock = mock(async (): Promise<"auto" | "skip"> => "skip");
 const readMappingConfigMock = mock(async () => ({ default_account: "", model_mirroring: "skip" as const, mappings: {} as Record<string, string> }));
+const writeCachedModelIdsMock = mock(async () => {});
 const fetchMock = mock(async (_input: unknown, _init?: RequestInit): Promise<Response> => {
   throw new Error("Unexpected fetch call");
 });
@@ -54,7 +55,7 @@ mock.module("./config.js", () => ({
   ensureMappingConfig: mock(async () => {}),
   ensureAuthLedger: mock(async () => {}),
   readMappingConfig: readMappingConfigMock,
-  writeCachedModelIds: mock(async () => {}),
+  writeCachedModelIds: writeCachedModelIdsMock,
   readCachedModelIds: mock(async () => []),
   resolveAliasForModel: mock(
     (_modelId: string, _aliases: string[], _mapping: any) => undefined
@@ -158,6 +159,8 @@ beforeEach(() => {
   readMirroringModeMock.mockImplementation(async (): Promise<"auto" | "skip"> => "skip");
   readMappingConfigMock.mockReset();
   readMappingConfigMock.mockImplementation(async () => ({ default_account: "", model_mirroring: "skip" as const, mappings: {} as Record<string, string> }));
+  writeCachedModelIdsMock.mockReset();
+  writeCachedModelIdsMock.mockImplementation(async () => {});
 });
 
 describe("createAuthHook", () => {
@@ -721,6 +724,98 @@ describe("createAuthHook", () => {
 
     expect(headers.Authorization).toBe("Bearer ghu_test");
     expect(headers["x-api-key"]).toBeUndefined();
+  });
+
+  test("loader warns when mirrored model cache persistence fails", async () => {
+    readMirroringModeMock.mockImplementation(async (): Promise<"auto" | "skip"> => "auto");
+    writeCachedModelIdsMock.mockImplementation(async () => {
+      throw new Error("cache write failed");
+    });
+
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve(
+        createJsonResponse({
+          all: [
+            {
+              id: "github-copilot",
+              models: {
+                "github-copilot/claude-sonnet-4": {
+                  id: "github-copilot/claude-sonnet-4",
+                  name: "Claude Sonnet 4",
+                },
+              },
+            },
+          ],
+        })
+      )
+    );
+
+    const { input } = createInput();
+    const hook = createAuthHook(input);
+    const provider = createProvider();
+
+    const loaded = await hook.loader?.(createAuthInfo(), provider);
+
+    expect(loaded).toMatchObject({
+      baseURL: "https://api.githubcopilot.com",
+      apiKey: "copilot",
+    });
+    expect(provider.models["claude-sonnet-4"]).toMatchObject({
+      id: "claude-sonnet-4",
+    });
+    expect(consoleWarnMock).toHaveBeenCalledWith("[multi-copilot]", {
+      level: "warn",
+      event: "mirrored-model-cache-write-failed",
+      fallback: "Continuing with mirrored models in memory only.",
+      error: "cache write failed",
+    });
+  });
+
+  test("loader warns and continues when model mirroring setup fails", async () => {
+    readMirroringModeMock.mockImplementation(async () => {
+      throw new Error("mapping config unavailable");
+    });
+
+    const { input } = createInput();
+    const hook = createAuthHook(input);
+    const provider = createProvider();
+
+    const loaded = await hook.loader?.(createAuthInfo(), provider);
+
+    expect(loaded).toMatchObject({
+      baseURL: "https://api.githubcopilot.com",
+      apiKey: "copilot",
+    });
+    expect(provider.models).toEqual({});
+    expect(consoleWarnMock).toHaveBeenCalledWith("[multi-copilot]", {
+      level: "warn",
+      event: "model-mirroring-failed",
+      fallback: "Continuing without mirrored github-copilot models.",
+      error: "mapping config unavailable",
+    });
+  });
+
+  test("loader warns when the github-copilot provider endpoint fails", async () => {
+    readMirroringModeMock.mockImplementation(async (): Promise<"auto" | "skip"> => "auto");
+    fetchMock.mockImplementationOnce(() => Promise.resolve(createJsonResponse({}, { status: 503 })));
+
+    const { input } = createInput();
+    const hook = createAuthHook(input);
+    const provider = createProvider();
+
+    const loaded = await hook.loader?.(createAuthInfo(), provider);
+
+    expect(loaded).toMatchObject({
+      baseURL: "https://api.githubcopilot.com",
+      apiKey: "copilot",
+    });
+    expect(provider.models).toEqual({});
+    expect(consoleWarnMock).toHaveBeenCalledWith("[multi-copilot]", {
+      level: "warn",
+      event: "github-copilot-provider-fetch-failed",
+      fallback: "Skipping model mirroring for this loader call.",
+      error: "HTTP 503",
+    });
   });
 
   test("loader skips model mirroring when model_mirroring is skip with no mappings", async () => {

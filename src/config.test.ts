@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import * as path from "node:path";
 
+const consoleWarnMock = mock((_message?: unknown, _payload?: unknown) => {});
 const mockWriteFile = mock(() => Promise.resolve());
 const mockRename = mock(() => Promise.resolve());
 const mockChmod = mock(() => Promise.resolve());
@@ -60,6 +61,12 @@ async function waitForCallCount(fn: { mock: { calls: unknown[][] } }, expectedCo
 }
 
 describe("Config paths and auto-generation", () => {
+  beforeEach(() => {
+    console.warn = consoleWarnMock as typeof console.warn;
+    consoleWarnMock.mockReset();
+    consoleWarnMock.mockImplementation((_message?: unknown, _payload?: unknown) => {});
+  });
+
   describe("Config paths", () => {
     test("CONFIG_DIR resolves to ~/.config/opencode", () => {
       expect(CONFIG_DIR).toBe(path.join("/test/home", ".config", "opencode"));
@@ -383,6 +390,8 @@ describe("readMirroringMode", () => {
 
     mockStat.mockReset();
     mockReadFile.mockReset();
+    consoleWarnMock.mockReset();
+    consoleWarnMock.mockImplementation((_message?: unknown, _payload?: unknown) => {});
     clearMappingCache();
   });
 
@@ -433,6 +442,44 @@ describe("readMirroringMode", () => {
 
     const result = await readMirroringMode();
     expect(result).toBe("skip");
+    expect(consoleWarnMock).toHaveBeenCalledWith("[multi-copilot]", {
+      level: "warn",
+      event: "mirroring-mode-read-failed",
+      fallback: "Falling back to model_mirroring='skip'.",
+      error: "ENOENT",
+    });
+  });
+});
+
+describe("readCachedModelIds", () => {
+  beforeEach(() => {
+    mockReadFile.mockReset();
+    consoleWarnMock.mockReset();
+    consoleWarnMock.mockImplementation((_message?: unknown, _payload?: unknown) => {});
+  });
+
+  test("returns [] without warning when the optional cache file is missing", async () => {
+    const { readCachedModelIds } = await import("./config.js");
+    mockReadFile.mockImplementation(() => Promise.reject(new Error("ENOENT")));
+
+    const result = await readCachedModelIds();
+
+    expect(result).toEqual([]);
+    expect(consoleWarnMock).not.toHaveBeenCalled();
+  });
+
+  test("returns [] and warns when the cache file shape is invalid", async () => {
+    const { readCachedModelIds } = await import("./config.js");
+    mockReadFile.mockImplementation(() => Promise.resolve(JSON.stringify({ nope: true })));
+
+    const result = await readCachedModelIds();
+
+    expect(result).toEqual([]);
+    expect(consoleWarnMock).toHaveBeenCalledWith("[multi-copilot]", {
+      level: "warn",
+      event: "cached-model-ids-invalid",
+      fallback: "Ignoring cached model IDs and continuing without mirrored-model cache.",
+    });
   });
 });
 
