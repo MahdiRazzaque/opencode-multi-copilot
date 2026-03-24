@@ -3,11 +3,12 @@ import { homedir } from "node:os";
 import * as path from "node:path";
 
 import { EMPTY_MAPPING_CONFIG, MappingConfigSchema } from "./schemas.js";
-import type { MappingConfig } from "./schemas.js";
+import type { MappingConfig, ModelMirroring } from "./schemas.js";
 
 export const CONFIG_DIR = path.join(homedir(), ".config", "opencode");
 export const MAPPING_PATH = path.join(CONFIG_DIR, "multi-copilot-mapping.json");
 export const AUTH_PATH = path.join(CONFIG_DIR, "multi-copilot-auth.json");
+export const MODEL_CACHE_PATH = path.join(CONFIG_DIR, "multi-copilot-models-cache.json");
 
 let cachedMapping: MappingConfig | null = null;
 let cachedMtime: number | null = null;
@@ -116,3 +117,42 @@ export function resolveAliasForModel(
 
   return undefined;
 }
+
+export async function setDefaultAccountIfEmpty(alias: string): Promise<void> {
+  const mapping = await readMappingConfig();
+  if (mapping.default_account) {
+    return;
+  }
+
+  mapping.default_account = alias;
+  cachedMapping = mapping;
+  await writeFileAtomically(MAPPING_PATH, `${JSON.stringify(mapping, null, 2)}\n`);
+}
+
+export async function readMirroringMode(): Promise<ModelMirroring> {
+  try {
+    const mapping = await readMappingConfig();
+    return mapping.model_mirroring ?? "skip";
+  } catch {
+    return "skip";
+  }
+}
+
+export async function readCachedModelIds(): Promise<string[]> {
+  try {
+    const content = await fs.readFile(MODEL_CACHE_PATH, "utf-8");
+    const parsed = JSON.parse(content) as unknown;
+    if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
+      return parsed as string[];
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+export async function writeCachedModelIds(modelIds: string[]): Promise<void> {
+  await ensureConfigDir();
+  await writeFileAtomically(MODEL_CACHE_PATH, `${JSON.stringify(modelIds, null, 2)}\n`);
+}
+ 

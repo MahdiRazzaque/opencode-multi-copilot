@@ -103,6 +103,7 @@ describe("Config paths and auto-generation", () => {
       const parsed = JSON.parse(writtenContent);
 
       expect(parsed.default_account).toBe("");
+      expect(parsed.model_mirroring).toBe("skip");
       expect(parsed.mappings).toEqual({});
     });
 
@@ -286,6 +287,7 @@ describe("resolveAliasForModel", () => {
 
     const mapping = {
       default_account: "default",
+      model_mirroring: "skip" as const,
       mappings: { "github-copilot/claude-opus-4.6": "work" },
     };
 
@@ -298,6 +300,7 @@ describe("resolveAliasForModel", () => {
 
     const mapping = {
       default_account: "personal",
+      model_mirroring: "skip" as const,
       mappings: {},
     };
 
@@ -310,6 +313,7 @@ describe("resolveAliasForModel", () => {
 
     const mapping = {
       default_account: "",
+      model_mirroring: "skip" as const,
       mappings: {},
     };
 
@@ -322,10 +326,70 @@ describe("resolveAliasForModel", () => {
 
     const mapping = {
       default_account: "",
+      model_mirroring: "skip" as const,
       mappings: {},
     };
 
     const result = resolveAliasForModel("some-model", [], mapping);
     expect(result).toBeUndefined();
+  });
+});
+
+describe("readMirroringMode", () => {
+  beforeEach(async () => {
+    const { clearMappingCache } = await import("./config.js");
+
+    mockStat.mockReset();
+    mockReadFile.mockReset();
+    clearMappingCache();
+  });
+
+  test("returns 'auto' when model_mirroring is set to auto", async () => {
+    const { readMirroringMode, clearMappingCache } = await import("./config.js");
+    clearMappingCache();
+
+    mockStat.mockImplementation(() => Promise.resolve({ mtimeMs: 10000 }));
+    mockReadFile.mockImplementation(() =>
+      Promise.resolve(JSON.stringify({ default_account: "", model_mirroring: "auto", mappings: {} }))
+    );
+
+    const result = await readMirroringMode();
+    expect(result).toBe("auto");
+  });
+
+  test("returns 'skip' when model_mirroring is set to skip", async () => {
+    const { readMirroringMode, clearMappingCache } = await import("./config.js");
+    clearMappingCache();
+
+    mockStat.mockImplementation(() => Promise.resolve({ mtimeMs: 11000 }));
+    mockReadFile.mockImplementation(() =>
+      Promise.resolve(JSON.stringify({ default_account: "", model_mirroring: "skip", mappings: {} }))
+    );
+
+    const result = await readMirroringMode();
+    expect(result).toBe("skip");
+  });
+
+  test("returns 'skip' when model_mirroring is not present in config", async () => {
+    const { readMirroringMode, clearMappingCache } = await import("./config.js");
+    clearMappingCache();
+
+    mockStat.mockImplementation(() => Promise.resolve({ mtimeMs: 12000 }));
+    mockReadFile.mockImplementation(() =>
+      Promise.resolve(JSON.stringify({ default_account: "", mappings: {} }))
+    );
+
+    const result = await readMirroringMode();
+    expect(result).toBe("skip");
+  });
+
+  test("returns 'skip' when config file cannot be read", async () => {
+    const { readMirroringMode, clearMappingCache } = await import("./config.js");
+    clearMappingCache();
+
+    mockStat.mockImplementation(() => Promise.reject(new Error("ENOENT")));
+
+    const result = await readMirroringMode();
+    expect(result).toBe("skip");
   });
 });
