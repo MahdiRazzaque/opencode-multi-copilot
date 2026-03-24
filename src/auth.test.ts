@@ -546,4 +546,214 @@ describe("createAuthHook", () => {
       apiKey: "copilot",
     });
   });
+
+  test("loader rewrites enterprise auth requests to the personal host for personal aliases", async () => {
+    resolveAccountForModelMock.mockImplementation(async () => ({
+      alias: "personal",
+      account: {
+        access_token: "ghu_personal",
+        refresh_token: "ghu_personal",
+        expires: 0,
+        enterpriseUrl: "",
+      },
+    }));
+    getTokenForAliasMock.mockImplementation(async (...args: unknown[]) => {
+      const alias = typeof args[0] === "string" ? args[0] : "personal";
+      return {
+        access_token: `ghu_${alias}`,
+        refresh_token: `ghu_${alias}`,
+        expires: 0,
+        enterpriseUrl: "",
+      };
+    });
+    fetchMock.mockImplementation(async () => Promise.resolve(createJsonResponse({ ok: true })));
+
+    const { input } = createInput();
+    const hook = createAuthHook(input);
+    const provider = createProvider();
+
+    const loaded = await hook.loader?.(createAuthInfo("https://github.enterprise.example/"), provider);
+
+    expect(loaded).toMatchObject({
+      baseURL: "https://copilot-api.github.enterprise.example",
+      apiKey: "copilot",
+    });
+
+    await loaded?.fetch?.("https://copilot-api.github.enterprise.example/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "multi-copilot/gpt-5",
+      }),
+    });
+
+    const fetchCall = fetchMock.mock.calls[0] as unknown[] | undefined;
+    if (!fetchCall) {
+      throw new Error("Expected wrapped fetch call");
+    }
+
+    expect(String(fetchCall[0])).toBe("https://api.githubcopilot.com/chat/completions");
+
+    const init = fetchCall[1] as RequestInit;
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer ghu_personal");
+  });
+
+  test("loader rewrites personal auth requests to the enterprise host for enterprise aliases", async () => {
+    resolveAccountForModelMock.mockImplementation(async () => ({
+      alias: "work",
+      account: {
+        access_token: "ghu_work",
+        refresh_token: "ghu_work",
+        expires: 0,
+        enterpriseUrl: "github.enterprise.example",
+      },
+    }));
+    getTokenForAliasMock.mockImplementation(async (...args: unknown[]) => {
+      const alias = typeof args[0] === "string" ? args[0] : "work";
+      return {
+        access_token: `ghu_${alias}`,
+        refresh_token: `ghu_${alias}`,
+        expires: 0,
+        enterpriseUrl: "github.enterprise.example",
+      };
+    });
+    fetchMock.mockImplementation(async () => Promise.resolve(createJsonResponse({ ok: true })));
+
+    const { input } = createInput();
+    const hook = createAuthHook(input);
+    const provider = createProvider();
+
+    const loaded = await hook.loader?.(createAuthInfo(), provider);
+
+    expect(loaded).toMatchObject({
+      baseURL: "https://api.githubcopilot.com",
+      apiKey: "copilot",
+    });
+
+    await loaded?.fetch?.("https://api.githubcopilot.com/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "multi-copilot/claude-opus-4.6",
+      }),
+    });
+
+    const fetchCall = fetchMock.mock.calls[0] as unknown[] | undefined;
+    if (!fetchCall) {
+      throw new Error("Expected wrapped fetch call");
+    }
+
+    expect(String(fetchCall[0])).toBe("https://copilot-api.github.enterprise.example/chat/completions");
+
+    const init = fetchCall[1] as RequestInit;
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer ghu_work");
+  });
+
+  test("loader rewrites Request objects from enterprise auth to the personal host for personal aliases", async () => {
+    resolveAccountForModelMock.mockImplementation(async () => ({
+      alias: "personal",
+      account: {
+        access_token: "ghu_personal",
+        refresh_token: "ghu_personal",
+        expires: 0,
+        enterpriseUrl: "",
+      },
+    }));
+    getTokenForAliasMock.mockImplementation(async () => ({
+      access_token: "ghu_personal",
+      refresh_token: "ghu_personal",
+      expires: 0,
+      enterpriseUrl: "",
+    }));
+    fetchMock.mockImplementation(async () => Promise.resolve(createJsonResponse({ ok: true })));
+
+    const { input } = createInput();
+    const hook = createAuthHook(input);
+    const provider = createProvider();
+
+    const loaded = await hook.loader?.(createAuthInfo("https://github.enterprise.example/"), provider);
+    const request = new Request("https://copilot-api.github.enterprise.example/chat/completions", {
+      method: "POST",
+      headers: new Headers({
+        "content-type": "application/json",
+        "x-api-key": "remove-me",
+      }),
+      body: JSON.stringify({
+        model: "multi-copilot/gpt-5",
+      }),
+    });
+
+    await loaded?.fetch?.(request);
+
+    expect(resolveAccountForModelMock).toHaveBeenCalledWith("gpt-5");
+
+    const fetchCall = fetchMock.mock.calls[0] as unknown[] | undefined;
+    if (!fetchCall) {
+      throw new Error("Expected wrapped fetch call");
+    }
+
+    expect(String(fetchCall[0])).toBe("https://api.githubcopilot.com/chat/completions");
+
+    const init = fetchCall[1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(JSON.stringify({ model: "multi-copilot/gpt-5" }));
+
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer ghu_personal");
+    expect(headers["content-type"]).toBe("application/json");
+    expect(headers["x-api-key"]).toBeUndefined();
+  });
+
+  test("loader rewrites Request objects from personal auth to the enterprise host for enterprise aliases", async () => {
+    resolveAccountForModelMock.mockImplementation(async () => ({
+      alias: "work",
+      account: {
+        access_token: "ghu_work",
+        refresh_token: "ghu_work",
+        expires: 0,
+        enterpriseUrl: "github.enterprise.example",
+      },
+    }));
+    getTokenForAliasMock.mockImplementation(async () => ({
+      access_token: "ghu_work",
+      refresh_token: "ghu_work",
+      expires: 0,
+      enterpriseUrl: "github.enterprise.example",
+    }));
+    fetchMock.mockImplementation(async () => Promise.resolve(createJsonResponse({ ok: true })));
+
+    const { input } = createInput();
+    const hook = createAuthHook(input);
+    const provider = createProvider();
+
+    const loaded = await hook.loader?.(createAuthInfo(), provider);
+    const request = new Request("https://api.githubcopilot.com/chat/completions", {
+      method: "POST",
+      headers: new Headers({
+        "content-type": "application/json",
+      }),
+      body: JSON.stringify({
+        model: "multi-copilot/claude-opus-4.6",
+      }),
+    });
+
+    await loaded?.fetch?.(request);
+
+    expect(resolveAccountForModelMock).toHaveBeenCalledWith("claude-opus-4.6");
+
+    const fetchCall = fetchMock.mock.calls[0] as unknown[] | undefined;
+    if (!fetchCall) {
+      throw new Error("Expected wrapped fetch call");
+    }
+
+    expect(String(fetchCall[0])).toBe("https://copilot-api.github.enterprise.example/chat/completions");
+
+    const init = fetchCall[1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(JSON.stringify({ model: "multi-copilot/claude-opus-4.6" }));
+
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer ghu_work");
+    expect(headers["content-type"]).toBe("application/json");
+  });
 });
