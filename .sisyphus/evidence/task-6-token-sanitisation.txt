@@ -1,6 +1,0 @@
-sanitised={"work":{"access_token":"[REDACTED]","refresh_token":"[REDACTED]","expires":1700000000,"enterpriseUrl":"https://example.invalid/work"},"personal":{"access_token":"[REDACTED]","refresh_token":"[REDACTED]","expires":1800000000,"enterpriseUrl":"https://example.invalid/personal"}}
-contains_redacted=true
-contains_work_access=false
-contains_work_refresh=false
-contains_personal_access=false
-contains_personal_refresh=false

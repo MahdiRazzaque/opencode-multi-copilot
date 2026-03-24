@@ -1,8 +1,10 @@
 node_modules/
 dist/
+coverage/
 .DS_Store
 *.log
 *.tgz
+*.tsbuildinfo
 
 # Editor settings
 .idea/
@@ -15,3 +17,6 @@ dist/
 # Local plugin state
 multi-copilot-auth.json
 multi-copilot-mapping.json
+
+# Local agent/planning state
+.sisyphus/
