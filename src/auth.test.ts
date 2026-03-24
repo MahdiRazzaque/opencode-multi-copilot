@@ -251,6 +251,101 @@ describe("createAuthHook", () => {
     });
   });
 
+  test("enterprise authorisation strips path components and preserves ports", async () => {
+    fetchMock
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          createJsonResponse({
+            device_code: "device-code-port-123",
+            user_code: "ABCD-1234",
+            verification_uri: "https://github.example.com:8443/login/device",
+            interval: 2,
+          })
+        )
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          createJsonResponse({
+            access_token: "enterprise-token-123",
+          })
+        )
+      );
+
+    const { input } = createInput();
+    const hook = createAuthHook(input);
+    const method = hook.methods[0];
+
+    if (method.type !== "oauth") {
+      throw new Error("Expected oauth method");
+    }
+
+    const authorisation = await method.authorize({
+      alias: "work",
+      deploymentType: "enterprise",
+      enterpriseUrl: "https://github.example.com:8443/api/v3?foo=bar#frag",
+    });
+
+    const firstCall = fetchMock.mock.calls[0] as unknown[] | undefined;
+    if (!firstCall) {
+      throw new Error("Expected enterprise device-code request");
+    }
+
+    expect(firstCall[0]).toBe("https://github.example.com:8443/login/device/code");
+
+    if (authorisation.method !== "auto") {
+      throw new Error("Expected auto authorisation flow");
+    }
+
+    const result = await authorisation.callback();
+
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://github.example.com:8443/login/oauth/access_token");
+    expect(setAccountMock).toHaveBeenCalledWith(
+      "work",
+      expect.objectContaining({
+        enterpriseUrl: "github.example.com:8443",
+      })
+    );
+    expect(result).toMatchObject({
+      type: "success",
+      refresh: "enterprise-token-123",
+      access: "enterprise-token-123",
+      expires: 0,
+      enterpriseUrl: "github.example.com:8443",
+    });
+  });
+
+  test("loader rewrites enterprise fetches using the normalised host without path segments", async () => {
+    fetchMock.mockImplementationOnce(() => Promise.resolve(createJsonResponse({ ok: true })));
+
+    const { input } = createInput();
+    const hook = createAuthHook(input);
+    const provider = createProvider();
+
+    const loaded = await hook.loader?.(
+      createAuthInfo("https://github.example.com:8443/api/v3?foo=bar#frag"),
+      provider
+    );
+
+    expect(loaded).toMatchObject({
+      baseURL: "https://copilot-api.github.example.com:8443",
+      apiKey: "copilot",
+    });
+
+    await loaded?.fetch?.("https://api.github.com/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    });
+
+    const fetchCall = fetchMock.mock.calls[0] as unknown[] | undefined;
+    if (!fetchCall) {
+      throw new Error("Expected wrapped fetch call");
+    }
+
+    expect(String(fetchCall[0])).toBe("https://copilot-api.github.example.com:8443/chat/completions");
+  });
+
   test("callback polls until it receives an access token", async () => {
     fetchMock
       .mockImplementationOnce(() =>

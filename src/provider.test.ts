@@ -139,8 +139,16 @@ describe("provider helpers", () => {
     expect(normaliseDomain("https://github.example.com")).toBe("github.example.com");
   });
 
-  test("normaliseDomain preserves path segments after stripping protocol", () => {
-    expect(normaliseDomain("https://github.example.com/api/v3")).toBe("github.example.com/api/v3");
+  test("normaliseDomain strips path, query, and fragment segments", () => {
+    expect(normaliseDomain("https://github.example.com/api/v3?foo=bar#frag")).toBe(
+      "github.example.com"
+    );
+  });
+
+  test("normaliseDomain preserves custom ports while stripping path components", () => {
+    expect(normaliseDomain("https://github.example.com:8443/api/v3?foo=bar#frag")).toBe(
+      "github.example.com:8443"
+    );
   });
 
   test("constructBaseURL uses enterprise routing only for enterprise accounts", () => {
