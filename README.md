@@ -22,32 +22,47 @@ It keeps more than one Copilot account authenticated at the same time, maps mode
 
 ## Installation
 
-### Option 1: Install as an npm plugin
-
-When this package is published, add it to your OpenCode config. OpenCode installs npm plugins through Bun at startup.
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-multi-copilot"]
-}
-```
-
-### Option 2: Install locally from source
-
-Clone this repository, install dependencies, and build it:
+Clone this repository, install dependencies, and build:
 
 ```bash
+git clone https://github.com/your-user/opencode-multi-copilot.git
+cd opencode-multi-copilot
 bun install
 bun run build
 ```
 
-OpenCode also supports local plugins from these directories:
+Then register the plugin with OpenCode using one of the methods below.
 
-- `.opencode/plugins/`
-- `~/.config/opencode/plugins/`
+### Method 1: Absolute path in OpenCode config
 
-Files in those directories are auto-loaded. If you load the plugin from local files and it needs external dependencies, keep a `package.json` alongside your OpenCode config so OpenCode can install them with Bun.
+Reference the built entry point directly in `~/.config/opencode/opencode.json` (or your project `opencode.json`):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["/absolute/path/to/opencode-multi-copilot/dist/index.js"]
+}
+```
+
+### Method 2: Copy into the plugins directory
+
+Copy the built file into one of the directories OpenCode auto-loads on startup:
+
+```bash
+cp dist/index.js ~/.config/opencode/plugins/opencode-multi-copilot.js
+```
+
+You will need to re-copy after each rebuild.
+
+### Method 3: Symlink into the plugins directory (recommended)
+
+Create a symbolic link so rebuilds are picked up automatically:
+
+```bash
+ln -s "$(pwd)/dist/index.js" ~/.config/opencode/plugins/opencode-multi-copilot.js
+```
+
+After a `bun run build`, OpenCode will use the updated plugin on next startup without any extra steps.
 
 ## OpenCode configuration
 
@@ -102,15 +117,15 @@ Example:
 {
   "default_account": "personal",
   "mappings": {
-    "claude-opus-4.6": "work",
-    "gpt-5": "personal"
+    "github-copilot/claude-opus-4.6": "work",
+    "github-copilot/gpt-5": "personal"
   }
 }
 ```
 
 Rules:
 
-- `mappings` routes specific model IDs to account aliases
+- `mappings` routes specific model IDs to account aliases, keys must use the `github-copilot/[model-name]` format
 - `default_account` is used when a model is not mapped
 - if `default_account` is unset, the first authenticated alias is used
 - mapping changes are reloaded on each intercepted request, so you do not need to restart OpenCode
