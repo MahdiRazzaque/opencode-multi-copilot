@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 const mockEnsureMappingConfig = mock(async () => {});
 const mockEnsureAuthLedger = mock(async () => {});
-const mockReadMappingConfig = mock(async () => ({ default_account: "", model_mirroring: "skip", mappings: {} }));
+const mockReadMappingConfig = mock(async () => ({
+  default_account: "",
+  model_mirroring: "skip",
+  mappings: {},
+}));
 const consoleWarnMock = mock((_message?: unknown, _payload?: unknown) => {});
 const mockCreateAuthHook = mock((input: any) => ({
   provider: "multi-copilot",
@@ -12,15 +16,17 @@ const mockCreateAuthHook = mock((input: any) => ({
 
     if (githubCopilot?.models) {
       for (const [modelId, modelInfo] of Object.entries(githubCopilot.models as Record<string, any>)) {
-        provider.models[modelId] = {
+        const bareId = modelId.replace(/^github-copilot\//, "");
+        provider.models[bareId] = {
           ...modelInfo,
+          id: bareId,
           cost: 0,
         };
       }
     }
 
     return {
-      baseURL: "https://api.github.com",
+      baseURL: "https://api.githubcopilot.com",
       apiKey: "copilot",
       fetch: globalThis.fetch,
     };
@@ -114,7 +120,11 @@ beforeEach(() => {
   mockEnsureAuthLedger.mockReset();
   mockEnsureAuthLedger.mockImplementation(async () => {});
   mockReadMappingConfig.mockReset();
-  mockReadMappingConfig.mockImplementation(async () => ({ default_account: "", model_mirroring: "skip", mappings: {} }));
+  mockReadMappingConfig.mockImplementation(async () => ({
+    default_account: "",
+    model_mirroring: "skip",
+    mappings: {},
+  }));
   mockCreateAuthHook.mockReset();
   mockCreateAuthHook.mockImplementation((input: any) => ({
     provider: "multi-copilot",
@@ -124,15 +134,17 @@ beforeEach(() => {
 
       if (githubCopilot?.models) {
         for (const [modelId, modelInfo] of Object.entries(githubCopilot.models as Record<string, any>)) {
-          provider.models[modelId] = {
+          const bareId = modelId.replace(/^github-copilot\//, "");
+          provider.models[bareId] = {
             ...modelInfo,
+            id: bareId,
             cost: 0,
           };
         }
       }
 
       return {
-        baseURL: "https://api.github.com",
+        baseURL: "https://api.githubcopilot.com",
         apiKey: "copilot",
         fetch: globalThis.fetch,
       };
@@ -179,6 +191,46 @@ describe("MultiCopilotPlugin", () => {
       name: "Multi Copilot",
       env: [],
       models: {},
+    });
+  });
+
+  test("config hook strips the github-copilot prefix from configured mapping models", async () => {
+    mockReadMappingConfig.mockImplementation(async () => ({
+      default_account: "",
+      model_mirroring: "skip",
+      mappings: {
+        "github-copilot/claude-opus-4.6": "work",
+        "github-copilot/gpt-5": "personal",
+      },
+    }));
+
+    const { input } = createInput();
+    const hooks = await MultiCopilotPlugin(input);
+    const config = createConfig({});
+
+    if (!hooks.config) {
+      throw new Error("Expected config hook to be defined");
+    }
+
+    await hooks.config(config);
+
+    expect(config.provider["multi-copilot"]?.models).toEqual({
+      "claude-opus-4.6": {
+        id: "claude-opus-4.6",
+        name: "claude-opus-4.6",
+        temperature: true,
+        tool_call: true,
+        cost: { input: 0, output: 0 },
+        limit: { context: 128000, output: 16384 },
+      },
+      "gpt-5": {
+        id: "gpt-5",
+        name: "gpt-5",
+        temperature: true,
+        tool_call: true,
+        cost: { input: 0, output: 0 },
+        limit: { context: 128000, output: 16384 },
+      },
     });
   });
 
@@ -312,8 +364,8 @@ describe("MultiCopilotPlugin", () => {
     await hooks.auth.loader(async () => ({ type: "oauth" } as any), provider);
 
     expect(provider.models).toEqual({
-      "github-copilot/gpt-4o": {
-        id: "github-copilot/gpt-4o",
+      "gpt-4o": {
+        id: "gpt-4o",
         name: "GPT-4o",
         cost: 0,
       },
@@ -341,7 +393,7 @@ describe("MultiCopilotPlugin", () => {
     const result = await hooks.auth.loader(async () => ({ type: "oauth" } as any), provider);
 
     expect(result).toEqual({
-      baseURL: "https://api.github.com",
+      baseURL: "https://api.githubcopilot.com",
       apiKey: "copilot",
       fetch: globalThis.fetch,
     });
@@ -360,7 +412,7 @@ describe("MultiCopilotPlugin", () => {
     const result = await hooks.auth.loader(async () => ({ type: "oauth" } as any), provider);
 
     expect(result).toEqual({
-      baseURL: "https://api.github.com",
+      baseURL: "https://api.githubcopilot.com",
       apiKey: "copilot",
       fetch: globalThis.fetch,
     });
