@@ -167,16 +167,91 @@ function extractModelId(body: unknown): string | undefined {
   }
 }
 
+function getRequestUrl(request: Request | URL | string): string {
+  if (request instanceof Request) {
+    return request.url;
+  }
+
+  return request instanceof URL ? request.href : request;
+}
+
+function normaliseHeaders(headers?: HeadersInit): Record<string, string> {
+  if (!headers) {
+    return {};
+  }
+
+  if (headers instanceof Headers) {
+    const values: Record<string, string> = {};
+    headers.forEach((value, key) => {
+      values[key] = value;
+    });
+    return values;
+  }
+
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers.map(([key, value]) => [key, String(value)]));
+  }
+
+  return Object.fromEntries(Object.entries(headers).map(([key, value]) => [key, String(value)]));
+}
+
+async function readRequestBody(request: Request | URL | string, init?: RequestInit): Promise<unknown> {
+  if (typeof init?.body === "string") {
+    try {
+      return JSON.parse(init.body);
+    } catch (_e) {
+      return init.body;
+    }
+  }
+
+  if (init?.body !== undefined) {
+    return init.body;
+  }
+
+  if (!(request instanceof Request)) {
+    return undefined;
+  }
+
+  try {
+    const text = await request.clone().text();
+    if (!text) {
+      return undefined;
+    }
+
+    return JSON.parse(text);
+  } catch (_e) {
+    return undefined;
+  }
+}
+
+async function buildForwardedInit(request: Request | URL | string, init: RequestInit | undefined): Promise<RequestInit> {
+  if (!(request instanceof Request)) {
+    return { ...init };
+  }
+
+  const baseInit: RequestInit = {
+    method: request.method,
+  };
+
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    const bodyText = await request.clone().text();
+    if (bodyText) {
+      baseInit.body = bodyText;
+    }
+  }
+
+  return {
+    ...baseInit,
+    ...init,
+  };
+}
+
 function rewriteRequestTarget(
   request: Request | URL | string,
   account: AccountRecord
 ): Request | URL | string {
-  if (!account.enterpriseUrl) {
-    return request;
-  }
-
   const baseUrl = constructBaseURL(account);
-  const target = request instanceof URL ? request.href : request.toString();
+  const target = getRequestUrl(request);
 
   try {
     const url = new URL(target);
@@ -269,7 +344,8 @@ export function createAuthHook(input: PluginInput): AuthHook {
       }
 
       const fetchFn = async function multiCopilotFetch(request: Request | URL | string, init?: RequestInit) {
-        const modelId = extractModelId(init?.body);
+        const body = await readRequestBody(request, init);
+        const modelId = extractModelId(typeof body === "string" ? body : JSON.stringify(body));
 
         let account: AccountRecord = {
           access_token: info.access,
@@ -284,18 +360,19 @@ export function createAuthHook(input: PluginInput): AuthHook {
           account = await ledger.getTokenForAlias(resolved.alias);
         }
 
-        const url = request instanceof URL ? request.href : request.toString();
-        let body: unknown;
-        try {
-          body = typeof init?.body === "string" ? JSON.parse(init.body) : init?.body;
-        } catch (_e) {}
+        const url = getRequestUrl(request);
 
         const isVision = detectVision(body, url);
         const isAgent = detectAgent(body, url);
 
+        const mergedHeaders = {
+          ...(request instanceof Request ? normaliseHeaders(request.headers) : {}),
+          ...normaliseHeaders(init?.headers),
+        };
+
         const headers: Record<string, string> = {
           "x-initiator": isAgent ? "agent" : "user",
-          ...(init?.headers as Record<string, string> | undefined),
+          ...mergedHeaders,
           "User-Agent": USER_AGENT,
           Authorization: `Bearer ${account.refresh_token || account.access_token}`,
           "Openai-Intent": "conversation-edits",
@@ -307,9 +384,11 @@ export function createAuthHook(input: PluginInput): AuthHook {
 
         delete headers.authorization;
         delete headers["x-api-key"];
+        delete headers.Authorization;
+        headers.Authorization = `Bearer ${account.refresh_token || account.access_token}`;
 
         return fetch(rewriteRequestTarget(request, account), {
-          ...init,
+          ...(await buildForwardedInit(request, init)),
           headers,
         });
       };
