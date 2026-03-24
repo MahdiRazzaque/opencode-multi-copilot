@@ -24,6 +24,7 @@ const readMappingConfigMock = mock(async () => ({ default_account: "", model_mir
 const fetchMock = mock(async (_input: unknown, _init?: RequestInit): Promise<Response> => {
   throw new Error("Unexpected fetch call");
 });
+const consoleWarnMock = mock((_message?: unknown, ..._args: unknown[]) => {});
 
 mock.module("node:timers/promises", () => ({
   setTimeout: sleepMock,
@@ -74,6 +75,16 @@ function createJsonResponse(body: unknown, init?: ResponseInit): Response {
   });
 }
 
+function createRawResponse(body: string, init?: ResponseInit): Response {
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+    },
+    ...init,
+  });
+}
+
 function createInput() {
   return {
     input: {
@@ -113,6 +124,9 @@ function createAuthInfo(enterpriseUrl = ""): () => Promise<Auth> {
 }
 
 beforeEach(() => {
+  console.warn = consoleWarnMock as typeof console.warn;
+  consoleWarnMock.mockReset();
+  consoleWarnMock.mockImplementation((_message?: unknown, ..._args: unknown[]) => {});
   sleepMock.mockReset();
   sleepMock.mockImplementation(async (_ms: number) => {});
   fetchMock.mockReset();
@@ -365,7 +379,7 @@ describe("createAuthHook", () => {
     expect(sleepMock).toHaveBeenCalledWith(10000);
   });
 
-  test("callback returns failed on an unrecoverable oauth error", async () => {
+  test("callback returns failed and reports the oauth reason for an unrecoverable oauth error", async () => {
     fetchMock
       .mockImplementationOnce(() =>
         Promise.resolve(
@@ -381,6 +395,7 @@ describe("createAuthHook", () => {
         Promise.resolve(
           createJsonResponse({
             error: "expired_token",
+            error_description: "The device code has expired",
           })
         )
       );
@@ -397,11 +412,139 @@ describe("createAuthHook", () => {
     if (authorisation.method !== "auto") {
       throw new Error("Expected auto authorisation flow");
     }
-    const result = await authorisation.callback();
 
-    expect(result).toEqual({
-      type: "failed",
-    });
+    await expect(authorisation.callback()).resolves.toEqual({ type: "failed" });
+    expect(consoleWarnMock).toHaveBeenCalledWith(
+      "Multi Copilot OAuth failure: expired_token: The device code has expired"
+    );
+  });
+
+  test("authorize rejects invalid JSON from the device endpoint", async () => {
+    fetchMock.mockImplementationOnce(() => Promise.resolve(createRawResponse("not-json")));
+
+    const { input } = createInput();
+    const hook = createAuthHook(input);
+    const method = hook.methods[0];
+
+    if (method.type !== "oauth") {
+      throw new Error("Expected oauth method");
+    }
+
+    await expect(
+      method.authorize({
+        alias: "work",
+        deploymentType: "github.com",
+      })
+    ).rejects.toThrow("Device authorisation returned invalid JSON");
+  });
+
+  test("callback returns failed when polling returns invalid JSON", async () => {
+    fetchMock
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          createJsonResponse({
+            device_code: "device-code-123",
+            user_code: "ABCD-1234",
+            verification_uri: "https://github.com/login/device",
+            interval: 2,
+          })
+        )
+      )
+      .mockImplementationOnce(() => Promise.resolve(createRawResponse("not-json")));
+
+    const { input } = createInput();
+    const hook = createAuthHook(input);
+    const method = hook.methods[0];
+
+    if (method.type !== "oauth") {
+      throw new Error("Expected oauth method");
+    }
+
+    const authorisation = await method.authorize({ alias: "work" });
+    if (authorisation.method !== "auto") {
+      throw new Error("Expected auto authorisation flow");
+    }
+
+    await expect(authorisation.callback()).resolves.toEqual({ type: "failed" });
+    expect(consoleWarnMock).toHaveBeenCalledWith(
+      "Multi Copilot OAuth failure: OAuth polling returned invalid JSON"
+    );
+  });
+
+  test("callback surfaces non-OK polling reasons", async () => {
+    fetchMock
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          createJsonResponse({
+            device_code: "device-code-123",
+            user_code: "ABCD-1234",
+            verification_uri: "https://github.com/login/device",
+            interval: 2,
+          })
+        )
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          createJsonResponse(
+            {
+              error: "access_denied",
+              error_description: "The user declined the request",
+            },
+            { status: 403 }
+          )
+        )
+      );
+
+    const { input } = createInput();
+    const hook = createAuthHook(input);
+    const method = hook.methods[0];
+
+    if (method.type !== "oauth") {
+      throw new Error("Expected oauth method");
+    }
+
+    const authorisation = await method.authorize({ alias: "work" });
+    if (authorisation.method !== "auto") {
+      throw new Error("Expected auto authorisation flow");
+    }
+
+    await expect(authorisation.callback()).resolves.toEqual({ type: "failed" });
+    expect(consoleWarnMock).toHaveBeenCalledWith(
+      "Multi Copilot OAuth failure: access_denied: The user declined the request"
+    );
+  });
+
+  test("callback returns failed for unexpected polling payloads", async () => {
+    fetchMock
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          createJsonResponse({
+            device_code: "device-code-123",
+            user_code: "ABCD-1234",
+            verification_uri: "https://github.com/login/device",
+            interval: 2,
+          })
+        )
+      )
+      .mockImplementationOnce(() => Promise.resolve(createJsonResponse({ ok: true })));
+
+    const { input } = createInput();
+    const hook = createAuthHook(input);
+    const method = hook.methods[0];
+
+    if (method.type !== "oauth") {
+      throw new Error("Expected oauth method");
+    }
+
+    const authorisation = await method.authorize({ alias: "work" });
+    if (authorisation.method !== "auto") {
+      throw new Error("Expected auto authorisation flow");
+    }
+
+    await expect(authorisation.callback()).resolves.toEqual({ type: "failed" });
+    expect(consoleWarnMock).toHaveBeenCalledWith(
+      "Multi Copilot OAuth failure: OAuth polling returned an unexpected payload"
+    );
   });
 
   test("loader mirrors github-copilot models when model_mirroring is auto", async () => {
