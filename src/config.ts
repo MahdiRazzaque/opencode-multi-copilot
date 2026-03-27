@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import * as path from "node:path";
 
 import { warnFallback } from "./diagnostics.js";
+import { formatModelName } from "./models.js";
 
 import { EMPTY_MAPPING_CONFIG, MappingConfigSchema } from "./schemas.js";
 import type { MappingConfig, ModelMirroring } from "./schemas.js";
@@ -12,6 +13,11 @@ export const CONFIG_DIR = path.join(homedir(), ".config", "opencode");
 export const MAPPING_PATH = path.join(CONFIG_DIR, "multi-copilot-mapping.json");
 export const AUTH_PATH = path.join(CONFIG_DIR, "multi-copilot-auth.json");
 export const MODEL_CACHE_PATH = path.join(CONFIG_DIR, "multi-copilot-models-cache.json");
+
+export interface CachedModel {
+  id: string;
+  name: string;
+}
 
 let cachedMapping: MappingConfig | null = null;
 let cachedMtime: number | null = null;
@@ -149,12 +155,29 @@ export async function readMirroringMode(): Promise<ModelMirroring> {
   }
 }
 
-export async function readCachedModelIds(): Promise<string[]> {
+export async function readCachedModels(): Promise<CachedModel[]> {
   try {
     const content = await fs.readFile(MODEL_CACHE_PATH, "utf-8");
     const parsed = JSON.parse(content) as unknown;
+
+    if (
+      Array.isArray(parsed) &&
+      parsed.length > 0 &&
+      typeof parsed[0] === "object" &&
+      parsed[0] !== null &&
+      "id" in parsed[0]
+    ) {
+      return parsed.filter(
+        (item): item is CachedModel =>
+          typeof item === "object" &&
+          item !== null &&
+          typeof (item as Record<string, unknown>).id === "string" &&
+          typeof (item as Record<string, unknown>).name === "string"
+      );
+    }
+
     if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
-      return parsed as string[];
+      return (parsed as string[]).map((id) => ({ id, name: formatModelName(id) }));
     }
 
     warnFallback(
@@ -176,10 +199,10 @@ export async function readCachedModelIds(): Promise<string[]> {
   }
 }
 
-export async function writeCachedModelIds(modelIds: string[]): Promise<void> {
+export async function writeCachedModels(models: CachedModel[]): Promise<void> {
   await ensureConfigDir();
   await withFileLock(MODEL_CACHE_PATH, async () => {
-    await writeFileAtomically(MODEL_CACHE_PATH, `${JSON.stringify(modelIds, null, 2)}\n`);
+    await writeFileAtomically(MODEL_CACHE_PATH, `${JSON.stringify(models, null, 2)}\n`);
   });
 }
  

@@ -31,8 +31,8 @@ const readMappingConfigMock = mock(
     mappings: {},
   })
 );
-const readCachedModelIdsMock = mock(async (): Promise<string[]> => []);
-const writeCachedModelIdsMock = mock(async () => {});
+const readCachedModelsMock = mock(async (): Promise<Array<{ id: string; name: string }>> => []);
+const writeCachedModelsMock = mock(async () => {});
 const fetchMock = mock(async (_input: unknown, _init?: RequestInit): Promise<Response> => {
   throw new Error("Unexpected fetch call");
 });
@@ -66,8 +66,8 @@ mock.module("./config.js", () => ({
   ensureMappingConfig: mock(async () => {}),
   ensureAuthLedger: mock(async () => {}),
   readMappingConfig: readMappingConfigMock,
-  writeCachedModelIds: writeCachedModelIdsMock,
-  readCachedModelIds: readCachedModelIdsMock,
+  writeCachedModels: writeCachedModelsMock,
+  readCachedModels: readCachedModelsMock,
   resolveAliasForModel: mock(
     (_modelId: string, _aliases: string[], _mapping: any) => undefined
   ),
@@ -186,10 +186,10 @@ beforeEach(() => {
   readMirroringModeMock.mockImplementation(async (): Promise<"auto" | "skip"> => "skip");
   readMappingConfigMock.mockReset();
   readMappingConfigMock.mockImplementation(async () => ({ default_account: "", model_mirroring: "skip" as const, mappings: {} as Record<string, string> }));
-  readCachedModelIdsMock.mockReset();
-  readCachedModelIdsMock.mockImplementation(async (): Promise<string[]> => []);
-  writeCachedModelIdsMock.mockReset();
-  writeCachedModelIdsMock.mockImplementation(async () => {});
+  readCachedModelsMock.mockReset();
+  readCachedModelsMock.mockImplementation(async (): Promise<Array<{ id: string; name: string }>> => []);
+  writeCachedModelsMock.mockReset();
+  writeCachedModelsMock.mockImplementation(async () => {});
 });
 
 describe("createAuthHook", () => {
@@ -824,12 +824,14 @@ describe("createAuthHook", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(sleepMock).toHaveBeenNthCalledWith(1, 1000);
     expect(sleepMock).toHaveBeenNthCalledWith(2, 1000);
-    expect(writeCachedModelIdsMock).toHaveBeenCalledWith(["claude-sonnet-4"]);
+    expect(writeCachedModelsMock).toHaveBeenCalledWith([
+      { id: "claude-sonnet-4", name: "Claude Sonnet 4" },
+    ]);
   });
 
   test("loader warns when mirrored model cache persistence fails", async () => {
     readMirroringModeMock.mockImplementation(async (): Promise<"auto" | "skip"> => "auto");
-    writeCachedModelIdsMock.mockImplementation(async () => {
+    writeCachedModelsMock.mockImplementation(async () => {
       throw new Error("cache write failed");
     });
 
@@ -983,7 +985,10 @@ describe("createAuthHook", () => {
 
   test("loader falls back to cached model ids when live mirroring fails", async () => {
     readMirroringModeMock.mockImplementation(async (): Promise<"auto" | "skip"> => "auto");
-    readCachedModelIdsMock.mockImplementation(async (): Promise<string[]> => ["claude-sonnet-4", "gpt-5"]);
+    readCachedModelsMock.mockImplementation(async (): Promise<Array<{ id: string; name: string }>> => [
+      { id: "claude-sonnet-4", name: "Claude Sonnet 4" },
+      { id: "gpt-5", name: "GPT 5" },
+    ]);
     fetchMock.mockImplementation(() => Promise.reject(new Error("Unable to connect. Is the computer able to access the url?")));
 
     const { input } = createInput();
@@ -999,7 +1004,7 @@ describe("createAuthHook", () => {
     expect(provider.models).toMatchObject({
       "claude-sonnet-4": {
         id: "claude-sonnet-4",
-        name: "claude-sonnet-4",
+        name: "Claude Sonnet 4",
         providerID: "multi-copilot",
         tool_call: true,
         capabilities: {
@@ -1011,7 +1016,7 @@ describe("createAuthHook", () => {
       },
       "gpt-5": {
         id: "gpt-5",
-        name: "gpt-5",
+        name: "GPT 5",
         providerID: "multi-copilot",
         tool_call: true,
         capabilities: {
@@ -1027,7 +1032,7 @@ describe("createAuthHook", () => {
 
   test("loader falls back to mapping when cached model ids are unavailable", async () => {
     readMirroringModeMock.mockImplementation(async (): Promise<"auto" | "skip"> => "auto");
-    readCachedModelIdsMock.mockImplementation(async (): Promise<string[]> => []);
+    readCachedModelsMock.mockImplementation(async (): Promise<Array<{ id: string; name: string }>> => []);
     readMappingConfigMock.mockImplementation(async () => ({
       default_account: "work",
       model_mirroring: "auto" as const,
@@ -1054,7 +1059,7 @@ describe("createAuthHook", () => {
     expect(provider.models).toMatchObject({
       "claude-sonnet-4": {
         id: "claude-sonnet-4",
-        name: "claude-sonnet-4",
+        name: "Claude Sonnet 4",
         providerID: "multi-copilot",
         tool_call: true,
         capabilities: {
@@ -1066,7 +1071,7 @@ describe("createAuthHook", () => {
       },
       "gpt-5": {
         id: "gpt-5",
-        name: "gpt-5",
+        name: "GPT 5",
         providerID: "multi-copilot",
         tool_call: true,
         capabilities: {

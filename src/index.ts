@@ -2,7 +2,12 @@ import type { Hooks, PluginInput } from "@opencode-ai/plugin";
 import type { Config } from "@opencode-ai/sdk";
 
 import { createAuthHook } from "./auth.js";
-import { ensureAuthLedger, ensureMappingConfig, readMappingConfig } from "./config.js";
+import {
+  ensureAuthLedger,
+  ensureMappingConfig,
+  readCachedModels,
+  readMappingConfig,
+} from "./config.js";
 import { warnFallback } from "./diagnostics.js";
 import { buildMultiCopilotModel } from "./models.js";
 
@@ -23,10 +28,20 @@ export default async function MultiCopilotPlugin(input: PluginInput): Promise<Ho
         );
         return null;
       });
+      const cachedModels = await readCachedModels().catch(() => []);
+      const nameMap = new Map(cachedModels.map((model) => [model.id, model.name]));
+
       if (mapping) {
         for (const key of Object.keys(mapping.mappings)) {
           const bareId = key.replace(/^github-copilot\//, "");
-          models[bareId] = buildMultiCopilotModel(bareId);
+          const cachedName = nameMap.get(bareId);
+          const source: Record<string, unknown> = {};
+
+          if (cachedName) {
+            source.name = cachedName;
+          }
+
+          models[bareId] = buildMultiCopilotModel(bareId, source);
         }
       }
 

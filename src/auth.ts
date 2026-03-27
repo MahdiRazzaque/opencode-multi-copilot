@@ -9,12 +9,13 @@ import { tempLog, warnFallback } from "./diagnostics.js";
 import { setAccount } from "./ledger.js";
 import { buildMultiCopilotModel } from "./models.js";
 import {
-  readCachedModelIds,
+  readCachedModels,
   readMappingConfig,
   readMirroringMode,
   setDefaultAccountIfEmpty,
-  writeCachedModelIds,
+  writeCachedModels,
 } from "./config.js";
+import type { CachedModel } from "./config.js";
 
 const OAUTH_POLLING_SAFETY_MARGIN_MS = 3000;
 const MODEL_MIRROR_RETRY_COUNT = 3;
@@ -387,13 +388,23 @@ async function fetchGithubCopilotModels(
   return undefined;
 }
 
-function addFallbackModelIds(target: Record<string, unknown>, modelIds: string[]): void {
+function addFallbackModelIds(
+  target: Record<string, unknown>,
+  modelIds: string[],
+  nameMap?: Map<string, string>
+): void {
   for (const bareId of modelIds) {
     if (!bareId || target[bareId]) {
       continue;
     }
 
-    target[bareId] = buildMultiCopilotModel(bareId, {}, { includeProviderMeta: true });
+    const source: Record<string, unknown> = {};
+    const cachedName = nameMap?.get(bareId);
+    if (cachedName) {
+      source.name = cachedName;
+    }
+
+    target[bareId] = buildMultiCopilotModel(bareId, source, { includeProviderMeta: true });
   }
 }
 
@@ -437,6 +448,7 @@ async function mirrorGithubCopilotModels(
   const models = await fetchGithubCopilotModels(auth, loaderId);
   if (models) {
     const bareIds: string[] = [];
+    const cachedModels: CachedModel[] = [];
     for (const [modelId, modelInfo] of Object.entries(models)) {
       const bareId = modelId.replace(/^github-copilot\//, "");
       bareIds.push(bareId);
@@ -445,6 +457,11 @@ async function mirrorGithubCopilotModels(
       // github-copilot's SDK instead of multi-copilot's custom fetch.
       const { providerID, api, ...rest } = modelInfo as Record<string, unknown>;
       const sourceApi = (api ?? {}) as Record<string, unknown>;
+      const modelName =
+        typeof (rest as Record<string, unknown>).name === "string"
+          ? ((rest as Record<string, unknown>).name as string)
+          : bareId;
+      cachedModels.push({ id: bareId, name: modelName });
 
       // Preserve existing config-hook models (they have full parsed structure);
       // only add newly discovered models from github-copilot.
@@ -466,7 +483,7 @@ async function mirrorGithubCopilotModels(
       mirroredModelCount: bareIds.length,
       finalModelCount: Object.keys(target).length,
     });
-    await writeCachedModelIds(bareIds).catch((error) => {
+    await writeCachedModels(cachedModels).catch((error) => {
       warnFallback(
         "mirrored-model-cache-write-failed",
         "Continuing with mirrored models in memory only.",
@@ -477,12 +494,17 @@ async function mirrorGithubCopilotModels(
     return;
   }
 
-  const cachedModelIds = await readCachedModelIds();
-  if (cachedModelIds.length > 0) {
-    addFallbackModelIds(target, cachedModelIds);
+  const cachedModels = await readCachedModels();
+  if (cachedModels.length > 0) {
+    const nameMap = new Map(cachedModels.map((model) => [model.id, model.name]));
+    addFallbackModelIds(
+      target,
+      cachedModels.map((model) => model.id),
+      nameMap
+    );
     tempLog("mirroring-cache-fallback", {
       loaderId,
-      cachedModelCount: cachedModelIds.length,
+      cachedModelCount: cachedModels.length,
       finalModelCount: Object.keys(target).length,
     });
     return;
