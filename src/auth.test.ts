@@ -98,11 +98,23 @@ function createRawResponse(body: string, init?: ResponseInit): Response {
 }
 
 function createInput() {
+  const providerListMock = mock(
+    async (): Promise<{ data: { all: Array<Record<string, unknown>> } }> => ({ data: { all: [] } })
+  );
+  const configProvidersMock = mock(
+    async (): Promise<{ data: { providers: Array<Record<string, unknown>> } }> => ({
+      data: { providers: [] },
+    })
+  );
+
   return {
     input: {
       client: {
+        config: {
+          providers: configProvidersMock,
+        },
         provider: {
-          list: mock(async () => ({ data: { all: [] } })),
+          list: providerListMock,
         },
       },
       project: {},
@@ -111,6 +123,8 @@ function createInput() {
       serverUrl: new URL("http://localhost:3000"),
       $: {},
     } as any,
+    configProvidersMock,
+    providerListMock,
   };
 }
 
@@ -663,26 +677,16 @@ describe("createAuthHook", () => {
   test("loader mirrors github-copilot models when model_mirroring is auto", async () => {
     readMirroringModeMock.mockImplementation(async (): Promise<"auto" | "skip"> => "auto");
 
-    const providerListResponse = createJsonResponse({
-      all: [
+    const modelsResponse = createJsonResponse({
+      data: [
         {
-          id: "github-copilot",
-          name: "GitHub Copilot",
-          env: [],
-          models: {
-            "github-copilot/claude-sonnet-4": {
-              id: "github-copilot/claude-sonnet-4",
-              name: "Claude Sonnet 4",
-              release_date: "2026-01-01",
-              attachment: false,
-              reasoning: true,
-              temperature: true,
-              tool_call: true,
-              limit: {
-                context: 200000,
-                output: 32000,
-              },
-              options: {},
+          id: "claude-sonnet-4",
+          name: "Claude Sonnet 4",
+          capabilities: {
+            type: "chat",
+            limits: {
+              max_prompt_tokens: 200000,
+              max_output_tokens: 32000,
             },
           },
         },
@@ -690,10 +694,10 @@ describe("createAuthHook", () => {
     });
 
     fetchMock
-      .mockImplementationOnce(() => Promise.resolve(providerListResponse))
+      .mockImplementationOnce(() => Promise.resolve(modelsResponse))
       .mockImplementationOnce(() => Promise.resolve(createJsonResponse({ ok: true })));
 
-    const { input } = createInput();
+    const { input, configProvidersMock, providerListMock } = createInput();
     const hook = createAuthHook(input);
     const provider = createProvider();
 
@@ -708,7 +712,7 @@ describe("createAuthHook", () => {
     expect(provider.models["claude-sonnet-4"]).toMatchObject({
       id: "claude-sonnet-4",
       name: "Claude Sonnet 4",
-      reasoning: true,
+      reasoning: false,
       attachment: false,
       temperature: true,
       tool_call: true,
@@ -722,7 +726,7 @@ describe("createAuthHook", () => {
       },
       capabilities: {
         temperature: true,
-        reasoning: true,
+        reasoning: false,
         attachment: false,
         toolcall: true,
         input: {
@@ -742,12 +746,9 @@ describe("createAuthHook", () => {
         interleaved: false,
       },
     });
-
-    const providerCall = fetchMock.mock.calls[0] as unknown[] | undefined;
-    if (!providerCall) {
-      throw new Error("Expected /provider fetch call");
-    }
-    expect(String(providerCall[0])).toBe("http://localhost:3000/provider");
+    expect(configProvidersMock).toHaveBeenCalledTimes(0);
+    expect(providerListMock).toHaveBeenCalledTimes(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
     await loaded?.fetch?.("https://api.github.com/chat/completions", {
       method: "POST",
@@ -761,6 +762,8 @@ describe("createAuthHook", () => {
 
     expect(resolveAccountForModelMock).toHaveBeenCalledWith("claude-sonnet-4");
     expect(getTokenForAliasMock).toHaveBeenCalledWith("work");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
 
     const fetchCall = fetchMock.mock.calls[1] as unknown[] | undefined;
     if (!fetchCall) {
@@ -778,20 +781,17 @@ describe("createAuthHook", () => {
     readMirroringModeMock.mockImplementation(async (): Promise<"auto" | "skip"> => "auto");
 
     fetchMock
-      .mockImplementationOnce(() => Promise.reject(new Error("temporary network issue")))
+      .mockImplementationOnce(() => Promise.reject(new Error("temporary models issue")))
       .mockImplementationOnce(() => Promise.resolve(createJsonResponse({}, { status: 502 })))
       .mockImplementationOnce(() =>
         Promise.resolve(
           createJsonResponse({
-            all: [
+            data: [
               {
-                id: "github-copilot",
-                models: {
-                  "github-copilot/claude-sonnet-4": {
-                    id: "github-copilot/claude-sonnet-4",
-                    name: "Claude Sonnet 4",
-                    options: {},
-                  },
+                id: "claude-sonnet-4",
+                name: "Claude Sonnet 4",
+                capabilities: {
+                  type: "chat",
                 },
               },
             ],
@@ -799,7 +799,7 @@ describe("createAuthHook", () => {
         )
       );
 
-    const { input } = createInput();
+    const { input, configProvidersMock, providerListMock } = createInput();
     const hook = createAuthHook(input);
     const provider = createProvider();
 
@@ -819,6 +819,8 @@ describe("createAuthHook", () => {
         toolcall: true,
       },
     });
+    expect(configProvidersMock).toHaveBeenCalledTimes(0);
+    expect(providerListMock).toHaveBeenCalledTimes(0);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(sleepMock).toHaveBeenNthCalledWith(1, 1000);
     expect(sleepMock).toHaveBeenNthCalledWith(2, 1000);
@@ -834,14 +836,12 @@ describe("createAuthHook", () => {
     fetchMock.mockImplementationOnce(() =>
       Promise.resolve(
         createJsonResponse({
-          all: [
+          data: [
             {
-              id: "github-copilot",
-              models: {
-                "github-copilot/claude-sonnet-4": {
-                  id: "github-copilot/claude-sonnet-4",
-                  name: "Claude Sonnet 4",
-                },
+              id: "claude-sonnet-4",
+              name: "Claude Sonnet 4",
+              capabilities: {
+                type: "chat",
               },
             },
           ],
@@ -900,11 +900,14 @@ describe("createAuthHook", () => {
     });
   });
 
-  test("loader warns when the github-copilot provider endpoint fails", async () => {
+  test("loader warns when the github-copilot models lookup fails", async () => {
     readMirroringModeMock.mockImplementation(async (): Promise<"auto" | "skip"> => "auto");
-    fetchMock.mockImplementation(() => Promise.resolve(createJsonResponse({}, { status: 503 })));
+    fetchMock.mockImplementation(async () => {
+      throw new Error("Unable to connect. Is the computer able to access the url?");
+    });
 
-    const { input } = createInput();
+    const { input, configProvidersMock, providerListMock } = createInput();
+
     const hook = createAuthHook(input);
     const provider = createProvider();
 
@@ -919,8 +922,10 @@ describe("createAuthHook", () => {
       level: "warn",
       event: "github-copilot-provider-fetch-failed",
       fallback: "Falling back from live model mirroring for this loader call.",
-      error: "HTTP 503",
+      error: "Unable to connect. Is the computer able to access the url?",
     });
+    expect(configProvidersMock).toHaveBeenCalledTimes(0);
+    expect(providerListMock).toHaveBeenCalledTimes(0);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(sleepMock).toHaveBeenNthCalledWith(1, 1000);
     expect(sleepMock).toHaveBeenNthCalledWith(2, 1000);
@@ -929,9 +934,12 @@ describe("createAuthHook", () => {
   test("loader emits temporary mirroring logs when temp logging is enabled", async () => {
     process.env.MULTI_COPILOT_TEMP_LOGS = "1";
     readMirroringModeMock.mockImplementation(async (): Promise<"auto" | "skip"> => "auto");
-    fetchMock.mockImplementation(() => Promise.resolve(createJsonResponse({}, { status: 503 })));
+    fetchMock.mockImplementation(async () => {
+      throw new Error("Unable to connect. Is the computer able to access the url?");
+    });
 
     const { input } = createInput();
+
     const hook = createAuthHook(input);
     const provider = createProvider();
 
@@ -951,7 +959,7 @@ describe("createAuthHook", () => {
         level: "warn",
         event: "temp-mirroring-fetch-attempt",
         attempt: 1,
-        url: "http://localhost:3000/provider",
+        source: "githubcopilot.models",
       })
     );
     expect(consoleWarnMock).toHaveBeenCalledWith(
@@ -960,7 +968,7 @@ describe("createAuthHook", () => {
         level: "warn",
         event: "temp-mirroring-fetch-error",
         attempt: 3,
-        error: "HTTP 503",
+        error: "Unable to connect. Is the computer able to access the url?",
       })
     );
     expect(consoleWarnMock).toHaveBeenCalledWith(
@@ -1028,9 +1036,12 @@ describe("createAuthHook", () => {
         "github-copilot/gpt-5": "personal",
       } as Record<string, string>,
     }));
-    fetchMock.mockImplementation(() => Promise.resolve(createJsonResponse({}, { status: 503 })));
+    fetchMock.mockImplementation(() =>
+      Promise.reject(new Error("Unable to connect. Is the computer able to access the url?"))
+    );
 
     const { input } = createInput();
+
     const hook = createAuthHook(input);
     const provider = createProvider();
 
