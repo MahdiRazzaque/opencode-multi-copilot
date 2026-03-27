@@ -138,14 +138,14 @@ export async function setDefaultAccountIfEmpty(alias: string): Promise<void> {
 export async function readMirroringMode(): Promise<ModelMirroring> {
   try {
     const mapping = await readMappingConfig();
-    return mapping.model_mirroring ?? "skip";
+    return mapping.model_mirroring ?? "auto";
   } catch (error) {
     warnFallback(
       "mirroring-mode-read-failed",
-      "Falling back to model_mirroring='skip'.",
+      "Falling back to model_mirroring='auto'.",
       error
     );
-    return "skip";
+    return "auto";
   }
 }
 
