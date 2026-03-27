@@ -136,7 +136,7 @@ describe("Config paths and auto-generation", () => {
       const parsed = JSON.parse(writtenContent);
 
       expect(parsed.default_account).toBe("");
-      expect(parsed.model_mirroring).toBe("skip");
+      expect(parsed.model_mirroring).toBe("auto");
       expect(parsed.mappings).toEqual({});
     });
 
@@ -421,7 +421,7 @@ describe("readMirroringMode", () => {
     expect(result).toBe("skip");
   });
 
-  test("returns 'skip' when model_mirroring is not present in config", async () => {
+  test("returns 'auto' when model_mirroring is not present in config", async () => {
     const { readMirroringMode, clearMappingCache } = await import("./config.js");
     clearMappingCache();
 
@@ -431,21 +431,21 @@ describe("readMirroringMode", () => {
     );
 
     const result = await readMirroringMode();
-    expect(result).toBe("skip");
+    expect(result).toBe("auto");
   });
 
-  test("returns 'skip' when config file cannot be read", async () => {
+  test("returns 'auto' when config file cannot be read", async () => {
     const { readMirroringMode, clearMappingCache } = await import("./config.js");
     clearMappingCache();
 
     mockStat.mockImplementation(() => Promise.reject(new Error("ENOENT")));
 
     const result = await readMirroringMode();
-    expect(result).toBe("skip");
+    expect(result).toBe("auto");
     expect(consoleWarnMock).toHaveBeenCalledWith("[multi-copilot]", {
       level: "warn",
       event: "mirroring-mode-read-failed",
-      fallback: "Falling back to model_mirroring='skip'.",
+      fallback: "Falling back to model_mirroring='auto'.",
       error: "ENOENT",
     });
   });
