@@ -33,7 +33,7 @@ const {
   ensureAuthLedger,
   ensureConfigDir,
   setDefaultAccountIfEmpty,
-  writeCachedModelIds,
+  writeCachedModels,
 } = await import("./config.js");
 
 function createDeferred(): {
@@ -451,7 +451,7 @@ describe("readMirroringMode", () => {
   });
 });
 
-describe("readCachedModelIds", () => {
+describe("readCachedModels", () => {
   beforeEach(() => {
     mockReadFile.mockReset();
     consoleWarnMock.mockReset();
@@ -459,20 +459,53 @@ describe("readCachedModelIds", () => {
   });
 
   test("returns [] without warning when the optional cache file is missing", async () => {
-    const { readCachedModelIds } = await import("./config.js");
+    const { readCachedModels } = await import("./config.js");
     mockReadFile.mockImplementation(() => Promise.reject(new Error("ENOENT")));
 
-    const result = await readCachedModelIds();
+    const result = await readCachedModels();
 
     expect(result).toEqual([]);
     expect(consoleWarnMock).not.toHaveBeenCalled();
   });
 
+  test("upgrades legacy cached string ids to formatted cached models", async () => {
+    const { readCachedModels } = await import("./config.js");
+    mockReadFile.mockImplementation(() =>
+      Promise.resolve(JSON.stringify(["claude-opus-4.6", "gpt-5"]))
+    );
+
+    const result = await readCachedModels();
+
+    expect(result).toEqual([
+      { id: "claude-opus-4.6", name: "Claude Opus 4.6" },
+      { id: "gpt-5", name: "GPT 5" },
+    ]);
+  });
+
+  test("returns cached model objects from the new cache format", async () => {
+    const { readCachedModels } = await import("./config.js");
+    mockReadFile.mockImplementation(() =>
+      Promise.resolve(
+        JSON.stringify([
+          { id: "claude-opus-4.6", name: "Claude Opus 4.6" },
+          { id: "gpt-5", name: "GPT 5" },
+        ])
+      )
+    );
+
+    const result = await readCachedModels();
+
+    expect(result).toEqual([
+      { id: "claude-opus-4.6", name: "Claude Opus 4.6" },
+      { id: "gpt-5", name: "GPT 5" },
+    ]);
+  });
+
   test("returns [] and warns when the cache file shape is invalid", async () => {
-    const { readCachedModelIds } = await import("./config.js");
+    const { readCachedModels } = await import("./config.js");
     mockReadFile.mockImplementation(() => Promise.resolve(JSON.stringify({ nope: true })));
 
-    const result = await readCachedModelIds();
+    const result = await readCachedModels();
 
     expect(result).toEqual([]);
     expect(consoleWarnMock).toHaveBeenCalledWith("[multi-copilot]", {
@@ -546,8 +579,8 @@ describe("mapping writes", () => {
   });
 
   test("uses unique temp paths for repeated model cache writes", async () => {
-    await writeCachedModelIds(["claude-opus-4.6"]);
-    await writeCachedModelIds(["gpt-5"]);
+    await writeCachedModels([{ id: "claude-opus-4.6", name: "Claude Opus 4.6" }]);
+    await writeCachedModels([{ id: "gpt-5", name: "GPT 5" }]);
 
     const firstWriteCall = mockWriteFile.mock.calls[0] as unknown as [string, string] | undefined;
     const secondWriteCall = mockWriteFile.mock.calls[1] as unknown as [string, string] | undefined;
@@ -556,6 +589,24 @@ describe("mapping writes", () => {
     }
 
     expect(firstWriteCall[0]).not.toBe(secondWriteCall[0]);
+  });
+
+  test("writes cached models as id-name objects", async () => {
+    await writeCachedModels([
+      { id: "claude-opus-4.6", name: "Claude Opus 4.6" },
+      { id: "gpt-5", name: "GPT 5" },
+    ]);
+
+    const writeCall = mockWriteFile.mock.calls[0] as unknown[] | undefined;
+    if (!writeCall) {
+      throw new Error("Expected writeFile to be called");
+    }
+
+    const writtenContent = writeCall[1] as string;
+    expect(JSON.parse(writtenContent)).toEqual([
+      { id: "claude-opus-4.6", name: "Claude Opus 4.6" },
+      { id: "gpt-5", name: "GPT 5" },
+    ]);
   });
 });
 
@@ -622,8 +673,8 @@ describe("mapping writes", () => {
   });
 
   test("uses unique temp paths for repeated model cache writes", async () => {
-    await writeCachedModelIds(["claude-opus-4.6"]);
-    await writeCachedModelIds(["gpt-5"]);
+    await writeCachedModels([{ id: "claude-opus-4.6", name: "Claude Opus 4.6" }]);
+    await writeCachedModels([{ id: "gpt-5", name: "GPT 5" }]);
 
     const firstWriteCall = mockWriteFile.mock.calls[0] as unknown as [string, string] | undefined;
     const secondWriteCall = mockWriteFile.mock.calls[1] as unknown as [string, string] | undefined;
