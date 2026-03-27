@@ -4,17 +4,7 @@ import type { Config } from "@opencode-ai/sdk";
 import { createAuthHook } from "./auth.js";
 import { ensureAuthLedger, ensureMappingConfig, readMappingConfig } from "./config.js";
 import { warnFallback } from "./diagnostics.js";
-
-function buildConfigModel(bareId: string) {
-  return {
-    id: bareId,
-    name: bareId,
-    temperature: true,
-    tool_call: true,
-    cost: { input: 0, output: 0 },
-    limit: { context: 128000, output: 16384 },
-  };
-}
+import { buildMultiCopilotModel } from "./models.js";
 
 export default async function MultiCopilotPlugin(input: PluginInput): Promise<Hooks> {
   await ensureMappingConfig();
@@ -24,7 +14,7 @@ export default async function MultiCopilotPlugin(input: PluginInput): Promise<Ho
     config: async (config: Config) => {
       config.provider = config.provider ?? {};
 
-      const models: Record<string, ReturnType<typeof buildConfigModel>> = {};
+      const models: Record<string, ReturnType<typeof buildMultiCopilotModel>> = {};
       const mapping = await readMappingConfig().catch((error) => {
         warnFallback(
           "mapping-config-unavailable",
@@ -36,7 +26,7 @@ export default async function MultiCopilotPlugin(input: PluginInput): Promise<Ho
       if (mapping) {
         for (const key of Object.keys(mapping.mappings)) {
           const bareId = key.replace(/^github-copilot\//, "");
-          models[bareId] = buildConfigModel(bareId);
+          models[bareId] = buildMultiCopilotModel(bareId);
         }
       }
 

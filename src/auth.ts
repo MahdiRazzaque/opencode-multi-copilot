@@ -5,12 +5,22 @@ import { z } from "zod";
 
 import { AliasSchema } from "./schemas.js";
 import { normaliseDomain, constructBaseURL, detectVision, detectAgent } from "./provider.js";
-import { warnFallback } from "./diagnostics.js";
+import { tempLog, warnFallback } from "./diagnostics.js";
 import { setAccount } from "./ledger.js";
-import { readMirroringMode, setDefaultAccountIfEmpty, writeCachedModelIds } from "./config.js";
+import { buildMultiCopilotModel } from "./models.js";
+import {
+  readCachedModelIds,
+  readMappingConfig,
+  readMirroringMode,
+  setDefaultAccountIfEmpty,
+  writeCachedModelIds,
+} from "./config.js";
 
 const OAUTH_POLLING_SAFETY_MARGIN_MS = 3000;
+const MODEL_MIRROR_RETRY_COUNT = 3;
+const MODEL_MIRROR_RETRY_DELAY_MS = 1000;
 const USER_AGENT = "opencode-multi-copilot";
+let loaderSequence = 0;
 
 export const GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code";
 export const GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
@@ -21,6 +31,13 @@ type AccountRecord = {
   refresh_token: string;
   expires: number;
   enterpriseUrl: string;
+};
+
+type ResolvedOAuthInfo = {
+  access: string;
+  refresh: string;
+  expires: number;
+  enterpriseUrl?: string;
 };
 
 type LedgerModule = {
@@ -267,46 +284,157 @@ async function loadLedgerModule(): Promise<LedgerModule> {
 }
 
 async function fetchGithubCopilotModels(
-  serverUrl: URL
+  auth: ResolvedOAuthInfo,
+  loaderId: number
 ): Promise<Record<string, unknown> | undefined> {
-  const url = new URL("/provider", serverUrl);
-  const response = await fetch(url, {
-    headers: { Accept: "application/json" },
+  let lastError: unknown;
+  const token = auth.refresh || auth.access;
+  const modelsUrl = new URL(
+    "/models",
+    constructBaseURL({ enterpriseUrl: auth.enterpriseUrl ?? "" })
+  );
+
+  tempLog("mirroring-fetch-start", {
+    loaderId,
+    source: "githubcopilot.models",
+    url: modelsUrl.href,
+    maxAttempts: MODEL_MIRROR_RETRY_COUNT,
   });
 
-  if (!response.ok) {
-    warnFallback(
-      "github-copilot-provider-fetch-failed",
-      "Skipping model mirroring for this loader call.",
-      `HTTP ${response.status}`
-    );
-    return undefined;
+  for (let attempt = 1; attempt <= MODEL_MIRROR_RETRY_COUNT; attempt += 1) {
+    try {
+      tempLog("mirroring-fetch-attempt", {
+        loaderId,
+        attempt,
+        source: "githubcopilot.models",
+      });
+
+      const response = await fetch(modelsUrl, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${token}`,
+          "Copilot-Integration-Id": "vscode-chat",
+          "Openai-Intent": "conversation-edits",
+          "User-Agent": USER_AGENT,
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const payload = (await parseJsonBody(response, "GitHub Copilot models")) as {
+        data?: Array<{
+          id?: string;
+          name?: string;
+          capabilities?: {
+            type?: string;
+            limits?: {
+              max_prompt_tokens?: number;
+              max_output_tokens?: number;
+            };
+          };
+          policy?: {
+            state?: string;
+          };
+        }>;
+      };
+      const items = Array.isArray(payload.data) ? payload.data : [];
+      const mirroredModels = Object.fromEntries(
+        items
+          .filter((item) => typeof item.id === "string" && item.id.length > 0)
+          .filter((item) => item.capabilities?.type === "chat")
+          .filter((item) => !item.id?.endsWith("paygo"))
+          .filter((item) => item.policy?.state !== "disabled")
+          .map((item) => [
+            item.id as string,
+            {
+              id: item.id as string,
+              name: item.name ?? (item.id as string),
+              limit: {
+                context: item.capabilities?.limits?.max_prompt_tokens,
+                output: item.capabilities?.limits?.max_output_tokens,
+              },
+            },
+          ])
+      );
+
+      tempLog("mirroring-fetch-success", {
+        loaderId,
+        attempt,
+        mirroredModelCount: Object.keys(mirroredModels).length,
+      });
+      return mirroredModels;
+    } catch (error) {
+      lastError = error;
+      tempLog("mirroring-fetch-error", {
+        loaderId,
+        attempt,
+        error: error instanceof Error ? error.message : String(error),
+        willRetry: attempt < MODEL_MIRROR_RETRY_COUNT,
+      });
+      if (attempt < MODEL_MIRROR_RETRY_COUNT) {
+        await sleep(MODEL_MIRROR_RETRY_DELAY_MS);
+      }
+    }
   }
 
-  const data = (await response.json()) as {
-    all?: Array<{ id: string; models: Record<string, unknown> }>;
-  };
+  warnFallback(
+    "github-copilot-provider-fetch-failed",
+    "Falling back from live model mirroring for this loader call.",
+    lastError
+  );
+  return undefined;
+}
 
-  const githubCopilot = (data.all ?? []).find((item) => item.id === "github-copilot");
-  return githubCopilot?.models;
+function addFallbackModelIds(target: Record<string, unknown>, modelIds: string[]): void {
+  for (const bareId of modelIds) {
+    if (!bareId || target[bareId]) {
+      continue;
+    }
+
+    target[bareId] = buildMultiCopilotModel(bareId, {}, { includeProviderMeta: true });
+  }
 }
 
 async function mirrorGithubCopilotModels(
   input: PluginInput,
-  provider: Parameters<NonNullable<AuthHook["loader"]>>[1]
+  auth: ResolvedOAuthInfo,
+  provider: Parameters<NonNullable<AuthHook["loader"]>>[1],
+  loaderId: number
 ) {
   const mode = await readMirroringMode();
 
+  tempLog("mirroring-mode", {
+    loaderId,
+    mode,
+    hasProviderModels: Boolean(provider?.models),
+  });
+
   if (mode !== "auto") {
+    tempLog("mirroring-skipped", {
+      loaderId,
+      reason: "mode-not-auto",
+    });
     return;
   }
 
   if (!provider?.models) {
+    tempLog("mirroring-skipped", {
+      loaderId,
+      reason: "provider-models-missing",
+    });
     return;
   }
 
   const target = provider.models as Record<string, unknown>;
-  const models = await fetchGithubCopilotModels(input.serverUrl);
+  tempLog("mirroring-live-fetch-requested", {
+    loaderId,
+    serverUrl: input.serverUrl.href,
+    initialModelCount: Object.keys(target).length,
+  });
+
+  const models = await fetchGithubCopilotModels(auth, loaderId);
   if (models) {
     const bareIds: string[] = [];
     for (const [modelId, modelInfo] of Object.entries(models)) {
@@ -324,16 +452,20 @@ async function mirrorGithubCopilotModels(
         continue;
       }
 
-      target[bareId] = {
-        ...rest,
-        id: bareId,
-        providerID: "multi-copilot",
-        api: {
-          id: sourceApi.id ?? bareId,
-          npm: "@ai-sdk/openai-compatible",
+      target[bareId] = buildMultiCopilotModel(
+        bareId,
+        {
+          ...rest,
+          api: sourceApi,
         },
-      };
+        { includeProviderMeta: true }
+      );
     }
+    tempLog("mirroring-live-fetch-applied", {
+      loaderId,
+      mirroredModelCount: bareIds.length,
+      finalModelCount: Object.keys(target).length,
+    });
     await writeCachedModelIds(bareIds).catch((error) => {
       warnFallback(
         "mirrored-model-cache-write-failed",
@@ -341,23 +473,86 @@ async function mirrorGithubCopilotModels(
         error
       );
     });
+
+    return;
   }
+
+  const cachedModelIds = await readCachedModelIds();
+  if (cachedModelIds.length > 0) {
+    addFallbackModelIds(target, cachedModelIds);
+    tempLog("mirroring-cache-fallback", {
+      loaderId,
+      cachedModelCount: cachedModelIds.length,
+      finalModelCount: Object.keys(target).length,
+    });
+    return;
+  }
+
+  const mapping = await readMappingConfig().catch((error) => {
+    warnFallback(
+      "mapping-model-fallback-read-failed",
+      "Continuing without mapping-based mirrored model fallback.",
+      error
+    );
+    return null;
+  });
+  if (!mapping) {
+    tempLog("mirroring-mapping-fallback-missing", {
+      loaderId,
+    });
+    return;
+  }
+
+  const mappedModelIds = Object.keys(mapping.mappings).map((modelId) =>
+    modelId.replace(/^github-copilot\//, "")
+  );
+
+  addFallbackModelIds(
+    target,
+    mappedModelIds
+  );
+  tempLog("mirroring-mapping-fallback", {
+    loaderId,
+    mappedModelCount: mappedModelIds.length,
+    finalModelCount: Object.keys(target).length,
+  });
 }
 
 export function createAuthHook(input: PluginInput): AuthHook {
   return {
     provider: "multi-copilot",
     async loader(auth, provider) {
-      await mirrorGithubCopilotModels(input, provider).catch((error) => {
-        warnFallback(
-          "model-mirroring-failed",
-          "Continuing without mirrored github-copilot models.",
-          error
-        );
+      const loaderId = (loaderSequence += 1);
+
+      tempLog("loader-start", {
+        loaderId,
+        serverUrl: input.serverUrl.href,
+        providerId: provider?.id ?? "unknown",
+        initialModelCount: provider?.models ? Object.keys(provider.models).length : null,
       });
 
       const info = await auth();
+      if (info && info.type === "oauth") {
+        await mirrorGithubCopilotModels(input, info, provider, loaderId).catch((error) => {
+          warnFallback(
+            "model-mirroring-failed",
+            "Continuing without mirrored github-copilot models.",
+            error
+          );
+        });
+      }
+
+      tempLog("loader-auth-result", {
+        loaderId,
+        authType: info?.type ?? "none",
+        hasEnterpriseUrl: Boolean(info && "enterpriseUrl" in info && info.enterpriseUrl),
+        finalModelCount: provider?.models ? Object.keys(provider.models).length : null,
+      });
       if (!info || info.type !== "oauth") {
+        tempLog("loader-return", {
+          loaderId,
+          returnedKeys: [],
+        });
         return {};
       }
 
