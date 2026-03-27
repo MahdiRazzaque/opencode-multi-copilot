@@ -48,7 +48,7 @@ describe("MappingConfigSchema", () => {
       mappings: {},
     });
     expect(result.default_account).toBe("");
-    expect(result.model_mirroring).toBe("skip");
+    expect(result.model_mirroring).toBe("auto");
     expect(result.mappings).toEqual({});
   });
 
@@ -81,12 +81,12 @@ describe("MappingConfigSchema", () => {
     expect(result.model_mirroring).toBe("skip");
   });
 
-  test("defaults model_mirroring to skip when not provided", () => {
+  test("defaults model_mirroring to auto when not provided", () => {
     const result = MappingConfigSchema.parse({
       default_account: "",
       mappings: {},
     });
-    expect(result.model_mirroring).toBe("skip");
+    expect(result.model_mirroring).toBe("auto");
   });
 
   test("rejects invalid model_mirroring value", () => {
@@ -200,7 +200,7 @@ describe("AccountDataSchema", () => {
 describe("EMPTY_MAPPING_CONFIG", () => {
   test("has correct shape", () => {
     expect(EMPTY_MAPPING_CONFIG.default_account).toBe("");
-    expect(EMPTY_MAPPING_CONFIG.model_mirroring).toBe("skip");
+    expect(EMPTY_MAPPING_CONFIG.model_mirroring).toBe("auto");
     expect(EMPTY_MAPPING_CONFIG.mappings).toEqual({});
   });
 

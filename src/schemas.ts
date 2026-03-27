@@ -14,7 +14,7 @@ export const AccountDataSchema = z.object({
   enterpriseUrl: z.string().default(""),
 });
 
-export const ModelMirroringSchema = z.enum(["auto", "skip"]).default("skip");
+export const ModelMirroringSchema = z.enum(["auto", "skip"]).default("auto");
 
 export const MappingConfigSchema = z.object({
   default_account: z.string(),
@@ -26,7 +26,7 @@ export const AuthLedgerSchema = z.record(AliasSchema, AccountDataSchema);
 
 export const EMPTY_MAPPING_CONFIG = {
   default_account: "",
-  model_mirroring: "skip",
+  model_mirroring: "auto",
   mappings: {},
 } as const;
 
