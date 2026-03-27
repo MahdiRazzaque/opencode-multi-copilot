@@ -7,6 +7,7 @@ const mockReadMappingConfig = mock(async () => ({
   model_mirroring: "skip",
   mappings: {},
 }));
+const mockReadCachedModels = mock(async () => [] as Array<{ id: string; name: string }>);
 const consoleWarnMock = mock((_message?: unknown, _payload?: unknown) => {});
 const mockCreateAuthHook = mock((input: any) => ({
   provider: "multi-copilot",
@@ -50,13 +51,13 @@ mock.module("./config.js", () => ({
   clearMappingCache: mock(() => {}),
   ensureConfigDir: mock(async () => {}),
   readMappingConfig: mockReadMappingConfig,
+  readCachedModels: mockReadCachedModels,
   resolveAliasForModel: mock(
     (_modelId: string, _aliases: string[], _mapping: any) => undefined
   ),
   setDefaultAccountIfEmpty: mock(async () => {}),
   readMirroringMode: mock(async () => "skip"),
-  writeCachedModelIds: mock(async () => {}),
-  readCachedModelIds: mock(async () => []),
+  writeCachedModels: mock(async () => {}),
 }));
 
 mock.module("./auth.js", () => ({
@@ -125,6 +126,8 @@ beforeEach(() => {
     model_mirroring: "skip",
     mappings: {},
   }));
+  mockReadCachedModels.mockReset();
+  mockReadCachedModels.mockImplementation(async () => [] as Array<{ id: string; name: string }>);
   mockCreateAuthHook.mockReset();
   mockCreateAuthHook.mockImplementation((input: any) => ({
     provider: "multi-copilot",
@@ -217,7 +220,7 @@ describe("MultiCopilotPlugin", () => {
     expect(config.provider["multi-copilot"]?.models).toEqual({
       "claude-opus-4.6": {
         id: "claude-opus-4.6",
-        name: "claude-opus-4.6",
+        name: "Claude Opus 4.6",
         temperature: true,
         reasoning: false,
         attachment: false,
@@ -248,7 +251,7 @@ describe("MultiCopilotPlugin", () => {
       },
       "gpt-5": {
         id: "gpt-5",
-        name: "gpt-5",
+        name: "GPT 5",
         temperature: true,
         reasoning: false,
         attachment: false,
@@ -276,6 +279,36 @@ describe("MultiCopilotPlugin", () => {
           },
           interleaved: false,
         },
+      },
+    });
+  });
+
+  test("config hook prefers cached model names for mapped models", async () => {
+    mockReadMappingConfig.mockImplementation(async () => ({
+      default_account: "",
+      model_mirroring: "skip",
+      mappings: {
+        "github-copilot/claude-opus-4.6": "work",
+      },
+    }));
+    mockReadCachedModels.mockImplementation(async () => [
+      { id: "claude-opus-4.6", name: "Claude Opus 4.6 (Cached)" },
+    ]);
+
+    const { input } = createInput();
+    const hooks = await MultiCopilotPlugin(input);
+    const config = createConfig({});
+
+    if (!hooks.config) {
+      throw new Error("Expected config hook to be defined");
+    }
+
+    await hooks.config(config);
+
+    expect(config.provider["multi-copilot"]?.models).toMatchObject({
+      "claude-opus-4.6": {
+        id: "claude-opus-4.6",
+        name: "Claude Opus 4.6 (Cached)",
       },
     });
   });
