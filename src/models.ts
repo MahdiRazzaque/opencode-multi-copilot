@@ -3,6 +3,38 @@ type ModelSource = Record<string, unknown>;
 const DEFAULT_COST = { input: 0, output: 0 };
 const DEFAULT_LIMIT = { context: 128000, output: 16384 };
 
+function isVersionSegment(segment: string): boolean {
+  return /^\d+(?:\.\d+)*$/.test(segment);
+}
+
+function isOpenAIOSeriesSegment(segment: string): boolean {
+  return /^o\d+$/i.test(segment);
+}
+
+export function formatModelName(slug: string): string {
+  return slug
+    .split("-")
+    .filter((segment) => segment.length > 0)
+    .map((segment) => {
+      const lowerSegment = segment.toLowerCase();
+
+      if (isVersionSegment(segment)) {
+        return segment;
+      }
+
+      if (lowerSegment === "gpt") {
+        return "GPT";
+      }
+
+      if (isOpenAIOSeriesSegment(segment)) {
+        return lowerSegment;
+      }
+
+      return `${lowerSegment[0]?.toUpperCase() ?? ""}${lowerSegment.slice(1)}`;
+    })
+    .join(" ");
+}
+
 function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -84,7 +116,10 @@ export function buildMultiCopilotModel(
   const model = {
     ...restWithoutCapabilities,
     id: bareId,
-    name: typeof source.name === "string" && source.name.length > 0 ? source.name : bareId,
+    name:
+      typeof source.name === "string" && source.name.length > 0
+        ? source.name
+        : formatModelName(bareId),
     temperature: normalizedCapabilities.temperature,
     reasoning: normalizedCapabilities.reasoning,
     attachment: normalizedCapabilities.attachment,
